@@ -1,10 +1,12 @@
-#include <vulkan/vulkan_core.h>
+#include "util.hpp"
 #define VULKAN_HPP_DISPATCH_LOADER_DYNAMIC 1
 
 #include <VkBootstrap.h>
 #include <spdlog/spdlog.h>
 #include <vulkan/vulkan.hpp>
 #include <vulkan/vulkan_enums.hpp>
+#include <vulkan/vulkan_handles.hpp>
+#include <vulkan/vulkan_hpp_macros.hpp>
 #include <vulkan/vulkan_structs.hpp>
 
 #include "GLFW/glfw3.h"
@@ -76,6 +78,7 @@ Backend::Backend(GLFWwindow* window) : m_Window(window)
         EnsureVk(vkb::InstanceBuilder()
                      .request_validation_layers()
                      .enable_extensions(glfwExtCount, glfwExt)
+                     .require_api_version(1, 2)
                      .use_default_debug_messenger()
                      .build());
     m_Instance = vkbInstance;
@@ -134,6 +137,41 @@ Backend::Backend(GLFWwindow* window) : m_Window(window)
                 .setCommandBufferCount(1)
                 .setLevel(vk::CommandBufferLevel::ePrimary))[0];
     }
+
+    VmaAllocatorCreateInfo vmaCreateInfo = {};
+    vmaCreateInfo.vulkanApiVersion = VK_API_VERSION_1_2;
+    vmaCreateInfo.physicalDevice = m_Gpu;
+    vmaCreateInfo.device = m_Device;
+    vmaCreateInfo.instance = m_Instance;
+    EnsureVk(vmaCreateAllocator(&vmaCreateInfo, &m_Allocator));
+
+    m_TransferFence = m_Device.createFence({});
+    m_TransferPool = m_Device.createCommandPool(
+        vk::CommandPoolCreateInfo().setQueueFamilyIndex(m_XfrIndex));
+    m_TransferCommand = m_Device.allocateCommandBuffers(
+        vk::CommandBufferAllocateInfo()
+            .setCommandPool(m_TransferPool)
+            .setCommandBufferCount(1)
+            .setLevel(vk::CommandBufferLevel::ePrimary))[0];
+}
+
+void Backend::BindVertexBuffer(BufferObj buf)
+{
+    m_FrameCommands[m_CurrentFrame].bindVertexBuffers(
+        0, {m_Buffers[buf.Id].Handle}, {0});
+}
+
+void Backend::BindPipeline(PipelineObj pip)
+{
+    m_FrameCommands[m_CurrentFrame].bindPipeline(
+        vk::PipelineBindPoint::eGraphics, m_Pipelines[pip.Id].Handle);
+}
+
+void Backend::Draw(uint32_t vertexCount, uint32_t instanceCount,
+                   uint32_t firstVertex, uint32_t firstInstance)
+{
+    m_FrameCommands[m_CurrentFrame].draw(vertexCount, instanceCount,
+                                         firstVertex, firstInstance);
 }
 
 uint32_t Backend::FrameBegin()
@@ -173,6 +211,9 @@ uint32_t Backend::FrameBegin()
                               .setColorAttachments({colorAttachment})
                               .setLayerCount(1));
 
+    cmd.setScissor(0, {vk::Rect2D({}, m_SwcExtent)});
+    cmd.setViewport(
+        0, {vk::Viewport(0, 0, m_SwcExtent.width, m_SwcExtent.height)});
     return imageIndex;
 }
 
@@ -215,6 +256,153 @@ void Backend::FrameEnd(uint32_t imageIndex)
     m_CurrentFrame = (m_CurrentFrame + 1) % FramesInFlight;
 }
 
+BufferObj Backend::CreateBuffer(vk::BufferUsageFlags usage, size_t size)
+{
+    vk::BufferCreateInfo createInfo = {};
+    createInfo.size = size;
+    createInfo.usage = usage | vk::BufferUsageFlagBits::eTransferDst;
+
+    VmaAllocationCreateInfo allocInfo = {};
+    allocInfo.usage = VMA_MEMORY_USAGE_AUTO;
+
+    Buffer buf = {.Alive = true};
+    vmaCreateBuffer(m_Allocator, (VkBufferCreateInfo*)&createInfo, &allocInfo,
+                    &buf.Handle, &buf.Allocation, &buf.AllocationInfo);
+
+    m_Buffers.push_back(buf);
+    return Object(m_Buffers.size() - 1, Object::Kind::Buffer);
+}
+
+void Backend::UploadBuffer(BufferObj obj, size_t size, void* data)
+{
+    Ensure(obj.Kind == Object::Kind::Buffer);
+
+    Buffer& buf = m_Buffers[obj.Id];
+    Ensure(buf.Alive);
+
+    Buffer staging = {.Alive = true};
+    vk::BufferCreateInfo createInfo = {};
+    createInfo.size = size;
+    createInfo.usage = vk::BufferUsageFlagBits::eTransferSrc;
+
+    VmaAllocationCreateInfo allocInfo = {};
+    allocInfo.usage = VMA_MEMORY_USAGE_AUTO;
+    allocInfo.flags = VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT |
+                      VMA_ALLOCATION_CREATE_MAPPED_BIT;
+
+    vmaCreateBuffer(m_Allocator, (VkBufferCreateInfo*)&createInfo, &allocInfo,
+                    &staging.Handle, &staging.Allocation,
+                    &staging.AllocationInfo);
+
+    memcpy(staging.AllocationInfo.pMappedData, data, size);
+    PerformImmediateTransfer(
+        [&](vk::CommandBuffer cmd) {
+            cmd.copyBuffer(staging.Handle, buf.Handle,
+                           {vk::BufferCopy(0, 0, size)});
+        });
+
+    DestroyBuffer(staging);
+}
+
+static vk::ShaderModule CreateShaderModule(vk::Device device,
+                                           const char* filename)
+{
+    FILE* file = fopen(filename, "rb");
+    Ensure(file != nullptr, "failed to read shader source {}", filename);
+
+    fseek(file, 0, SEEK_END);
+    long srcSz = ftell(file);
+    rewind(file);
+
+    char* src = new char[srcSz];
+    fread(src, sizeof(char), srcSz, file);
+
+    fclose(file);
+
+    vk::ShaderModule module =
+        device.createShaderModule(vk::ShaderModuleCreateInfo(
+            {}, srcSz, reinterpret_cast<uint32_t*>(src)));
+    delete[] src;
+
+    return module;
+}
+
+PipelineObj Backend::CreatePipeline(const CreatePipelineInfo& info)
+{
+    std::vector<vk::PipelineShaderStageCreateInfo> shaderStages = {};
+
+    Ensure(info.VertexShader != nullptr);
+    vk::ShaderModule vsMod = CreateShaderModule(m_Device, info.VertexShader);
+    shaderStages.push_back(vk::PipelineShaderStageCreateInfo(
+        {}, vk::ShaderStageFlagBits::eVertex, vsMod, "main"));
+
+    vk::ShaderModule fsMod = nullptr;
+    if (info.FragmentShader != nullptr)
+    {
+        fsMod = CreateShaderModule(m_Device, info.FragmentShader);
+        shaderStages.push_back(vk::PipelineShaderStageCreateInfo(
+            {}, vk::ShaderStageFlagBits::eFragment, fsMod, "main"));
+    }
+
+    vk::PipelineVertexInputStateCreateInfo vertexInputInfo = {};
+    vertexInputInfo.setVertexBindingDescriptions(info.Bindings);
+    vertexInputInfo.setVertexAttributeDescriptions(info.Attributes);
+
+    vk::PipelineInputAssemblyStateCreateInfo inputAssembly = {};
+    inputAssembly.topology = vk::PrimitiveTopology::eTriangleList;
+
+    vk::PipelineViewportStateCreateInfo viewportState = {};
+    viewportState.viewportCount = 1;
+    viewportState.scissorCount = 1;
+
+    vk::PipelineRasterizationStateCreateInfo rasterizer = {};
+    rasterizer.lineWidth = 1.0f;
+
+    vk::PipelineMultisampleStateCreateInfo multisampling = {};
+    multisampling.rasterizationSamples = vk::SampleCountFlagBits::e1;
+
+    vk::PipelineColorBlendAttachmentState colorBlendAttachment = {};
+    colorBlendAttachment.colorWriteMask =
+        vk::ColorComponentFlagBits::eR | vk::ColorComponentFlagBits::eG |
+        vk::ColorComponentFlagBits::eB | vk::ColorComponentFlagBits::eA;
+
+    vk::PipelineColorBlendStateCreateInfo colorBlending = {};
+    colorBlending.setAttachments({colorBlendAttachment});
+
+    vk::PipelineLayoutCreateInfo pipelineLayoutInfo = {};
+    vk::PipelineLayout layout =
+        m_Device.createPipelineLayout(pipelineLayoutInfo);
+
+    vk::PipelineRenderingCreateInfo pipelineRenderingInfo = {};
+    pipelineRenderingInfo.setColorAttachmentFormats({m_SwcImageFormat});
+
+    vk::PipelineDynamicStateCreateInfo dynamicState = {};
+    auto states = {vk::DynamicState::eScissor, vk::DynamicState::eViewport};
+    dynamicState.dynamicStateCount = states.size();
+    dynamicState.pDynamicStates = states.begin();
+
+    vk::GraphicsPipelineCreateInfo pipelineInfo = {};
+    pipelineInfo.pNext = &pipelineRenderingInfo;
+    pipelineInfo.setStages(shaderStages);
+    pipelineInfo.pVertexInputState = &vertexInputInfo;
+    pipelineInfo.pInputAssemblyState = &inputAssembly;
+    pipelineInfo.pViewportState = &viewportState;
+    pipelineInfo.pRasterizationState = &rasterizer;
+    pipelineInfo.pMultisampleState = &multisampling;
+    pipelineInfo.pColorBlendState = &colorBlending;
+    pipelineInfo.pDynamicState = &dynamicState;
+    pipelineInfo.layout = layout;
+
+    vk::Pipeline pip =
+        EnsureVk(m_Device.createGraphicsPipeline(nullptr, pipelineInfo));
+
+    m_Device.destroyShaderModule(vsMod);
+    m_Device.destroyShaderModule(fsMod);
+
+    m_Pipelines.push_back({.Alive = true, .Handle = pip, .Layout = layout});
+    return Object(m_Pipelines.size() - 1, Object::Kind::Pipeline);
+}
+
 void Backend::DestroySwapchain()
 {
     for (vk::ImageView view : m_SwcViews)
@@ -236,6 +424,7 @@ void Backend::Resize(uint32_t width, uint32_t height)
                      .set_old_swapchain(m_Swapchain)
                      .set_desired_extent(width, height)
                      .build());
+    m_SwcImageFormat = (vk::Format)swc.image_format;
     if (m_Swapchain != nullptr)
         DestroySwapchain();
     m_Swapchain = swc;
@@ -247,10 +436,51 @@ void Backend::Resize(uint32_t width, uint32_t height)
         sema = m_Device.createSemaphore({});
 }
 
+void Backend::Destroy(Object obj)
+{
+    switch (obj.Kind)
+    {
+    case Object::Kind::Buffer:
+        DestroyBuffer(m_Buffers[obj.Id]);
+        break;
+    case Object::Kind::Pipeline:
+        DestroyPipeline(m_Pipelines[obj.Id]);
+        break;
+    }
+}
+
+void Backend::DestroyPipeline(Pipeline& pip)
+{
+    if (pip.Alive)
+    {
+        m_Device.destroyPipeline(pip.Handle);
+        m_Device.destroyPipelineLayout(pip.Layout);
+        pip.Alive = false;
+    }
+}
+
+void Backend::DestroyBuffer(Buffer& buf)
+{
+    if (buf.Alive)
+    {
+        vmaDestroyBuffer(m_Allocator, buf.Handle, buf.Allocation);
+        buf.Alive = false;
+    }
+}
+
 Backend::~Backend()
 {
     m_Device.waitIdle();
 
+    m_Device.destroyCommandPool(m_TransferPool);
+    m_Device.destroyFence(m_TransferFence);
+
+    for (Pipeline& pip : m_Pipelines)
+        DestroyPipeline(pip);
+    for (Buffer& buf : m_Buffers)
+        DestroyBuffer(buf);
+
+    vmaDestroyAllocator(m_Allocator);
     DestroySwapchain();
 
     m_Device.destroyCommandPool(m_FramePool);
@@ -264,6 +494,21 @@ Backend::~Backend()
     m_Instance.destroySurfaceKHR(m_Surface);
     m_Instance.destroyDebugUtilsMessengerEXT(m_DbgMsg);
     m_Instance.destroy();
+}
+
+void Backend::PerformImmediateTransfer(
+    std::function<void(vk::CommandBuffer)> proc)
+{
+    m_Device.resetCommandPool(m_TransferPool);
+    m_TransferCommand.begin(vk::CommandBufferBeginInfo());
+    proc(m_TransferCommand);
+    m_TransferCommand.end();
+
+    m_XfrQueue.submit(vk::SubmitInfo().setCommandBuffers({m_TransferCommand}),
+                      m_TransferFence);
+    EnsureVk(m_Device.waitForFences({m_TransferFence}, true, UINT64_MAX));
+
+    m_Device.resetFences(m_TransferFence);
 }
 
 } // namespace gfx

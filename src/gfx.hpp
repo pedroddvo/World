@@ -1,11 +1,44 @@
 #pragma once
+#include <functional>
+#include <initializer_list>
 #include <vulkan/vulkan.hpp>
 
 #include <GLFW/glfw3.h>
+#include <vk_mem_alloc.h>
+#include <vulkan/vulkan_core.h>
 #include <vulkan/vulkan_handles.hpp>
 
 namespace gfx
 {
+
+struct Object
+{
+  private:
+    enum class Kind
+    {
+        Buffer,
+        Pipeline
+    };
+
+    Object(uint32_t id, Kind kind) : Id(id), Kind(kind) {}
+
+    uint32_t Id;
+    Kind Kind;
+
+    friend class Backend;
+};
+
+using BufferObj = Object;
+using PipelineObj = Object;
+
+struct CreatePipelineInfo
+{
+    const char* VertexShader = nullptr;
+    const char* FragmentShader = nullptr;
+
+    std::initializer_list<vk::VertexInputBindingDescription> Bindings = {};
+    std::initializer_list<vk::VertexInputAttributeDescription> Attributes = {};
+};
 
 class Backend
 {
@@ -21,7 +54,19 @@ class Backend
     uint32_t FrameBegin();
     void FrameEnd(uint32_t imageIndex);
 
+    void BindVertexBuffer(BufferObj buf);
+    void BindPipeline(PipelineObj pip);
+
+    void Draw(uint32_t vertexCount, uint32_t instanceCount,
+              uint32_t firstVertex = 0, uint32_t firstInstance = 0);
+
     void Resize(uint32_t width, uint32_t height);
+    void Destroy(Object obj);
+
+    BufferObj CreateBuffer(vk::BufferUsageFlags usage, size_t size);
+    void UploadBuffer(BufferObj obj, size_t size, void* data);
+
+    PipelineObj CreatePipeline(const CreatePipelineInfo& info);
 
   private:
     void DestroySwapchain();
@@ -41,6 +86,7 @@ class Backend
     std::vector<VkImage> m_SwcImages = {};
     std::vector<VkImageView> m_SwcViews = {};
     vk::Extent2D m_SwcExtent = {};
+    vk::Format m_SwcImageFormat = {};
 
     static constexpr uint32_t FramesInFlight = 2;
     std::array<vk::Semaphore, FramesInFlight> m_PresentCompleteSemas = {};
@@ -49,8 +95,34 @@ class Backend
 
     vk::CommandPool m_FramePool = {};
     std::array<vk::CommandBuffer, FramesInFlight> m_FrameCommands = {};
-
     uint32_t m_CurrentFrame = 0;
+
+    vk::CommandPool m_TransferPool = {};
+    vk::CommandBuffer m_TransferCommand = {};
+    vk::Fence m_TransferFence = {};
+
+    VmaAllocator m_Allocator = {};
+
+    struct Buffer
+    {
+        bool Alive = false;
+        VkBuffer Handle = {};
+        VmaAllocation Allocation = {};
+        VmaAllocationInfo AllocationInfo = {};
+    };
+    std::vector<Buffer> m_Buffers = {};
+    void DestroyBuffer(Buffer& buf);
+
+    struct Pipeline
+    {
+        bool Alive = false;
+        VkPipeline Handle = {};
+        VkPipelineLayout Layout = {};
+    };
+    std::vector<Pipeline> m_Pipelines = {};
+    void DestroyPipeline(Pipeline& pip);
+
+    void PerformImmediateTransfer(std::function<void(vk::CommandBuffer)> proc);
 };
 
 } // namespace gfx

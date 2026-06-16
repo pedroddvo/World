@@ -6,6 +6,7 @@ set(CMAKE_CXX_STANDARD 20)
 project(world)
 
 add_executable(world
+    src/gfx/vma.cpp
     src/gfx.cpp
     src/main.cpp)
 
@@ -19,8 +20,12 @@ FetchContent_Declare(vk-bootstrap
 FetchContent_Declare(spdlog
     GIT_REPOSITORY https://github.com/gabime/spdlog.git
     GIT_TAG v1.x)
-FetchContent_MakeAvailable(glfw vk-bootstrap spdlog)
+FetchContent_Declare(vma
+    GIT_REPOSITORY https://github.com/GPUOpen-LibrariesAndSDKs/VulkanMemoryAllocator.git
+    GIT_TAG master)
+FetchContent_MakeAvailable(glfw vk-bootstrap spdlog vma)
 
 find_package(Vulkan REQUIRED)
 
-target_link_libraries(world PRIVATE glfw vk-bootstrap spdlog Vulkan::Vulkan)
+target_link_libraries(world PRIVATE 
+    glfw vk-bootstrap spdlog Vulkan::Vulkan VulkanMemoryAllocator)
