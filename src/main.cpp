@@ -1,4 +1,5 @@
 #include "gfx.hpp"
+#include "gfx/noise.hpp"
 #include "util.hpp"
 #include <GLFW/glfw3.h>
 #include <stdio.h>
@@ -20,12 +21,24 @@ int main()
         .Attributes = {{0, 0, vk::Format::eR32G32B32A32Sfloat}},
     });
 
-    float vertices[] = {0.0f, 0.5f, 0.0f, 1.0f, 
-        -0.5f, -0.5f, 0.0f, 1.0f, 
-        0.5f, -0.5f, 0.0f,  1.0f};
+    float vertices[] = {0.0f, 0.5f, 0.0f, 1.0f,  -0.5f, -0.5f,
+                        0.0f, 1.0f, 0.5f, -0.5f, 0.0f,  1.0f};
     gfx::BufferObj buf = backend.CreateBuffer(
         vk::BufferUsageFlagBits::eVertexBuffer, sizeof(vertices));
     backend.UploadBuffer(buf, sizeof(vertices), vertices);
+
+    FILE* fp = fopen("out.ppm", "wb");
+    fprintf(fp, "P3\n%d %d\n255\n", 800, 600);
+    for (int j = 0; j < 600; j++)
+    {
+        for (int i = 0; i < 800; i++)
+        {
+	    int v = (int)(noise::Perlin2D({i/800.0f*16.0f, j/600.0f*16.0f})*255);
+	    fprintf(fp, "%d %d %d ", v, v, v);
+        }
+	fprintf(fp, "\n");
+    }
+    fclose(fp);
 
     while (!glfwWindowShouldClose(window))
     {
