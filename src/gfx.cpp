@@ -153,6 +153,11 @@ Backend::Backend(GLFWwindow* window) : m_Window(window)
             .setCommandPool(m_TransferPool)
             .setCommandBufferCount(1)
             .setLevel(vk::CommandBufferLevel::ePrimary))[0];
+
+    std::initializer_list<vk::DescriptorPoolSize> poolSizes = {
+        {vk::DescriptorType::eCombinedImageSampler, 10}};
+    m_DescriptorPool = m_Device.createDescriptorPool(
+        vk::DescriptorPoolCreateInfo().setMaxSets(10).setPoolSizes(poolSizes));
 }
 
 void Backend::BindVertexBuffer(BufferObj buf)
@@ -161,10 +166,18 @@ void Backend::BindVertexBuffer(BufferObj buf)
         0, {m_Buffers[buf.Id].Handle}, {0});
 }
 
-void Backend::BindPipeline(PipelineObj pip)
+void Backend::BindPipeline(PipelineObj pipObj)
 {
+    auto pip = m_Pipelines[pipObj.Id];
     m_FrameCommands[m_CurrentFrame].bindPipeline(
-        vk::PipelineBindPoint::eGraphics, m_Pipelines[pip.Id].Handle);
+        vk::PipelineBindPoint::eGraphics, pip.Handle);
+
+    if (pip.Descriptor != nullptr)
+    {
+        m_FrameCommands[m_CurrentFrame].bindDescriptorSets(
+            vk::PipelineBindPoint::eGraphics, pip.Layout, 0, {pip.Descriptor},
+            {});
+    }
 }
 
 void Backend::Draw(uint32_t vertexCount, uint32_t instanceCount,
@@ -256,6 +269,142 @@ void Backend::FrameEnd(uint32_t imageIndex)
     m_CurrentFrame = (m_CurrentFrame + 1) % FramesInFlight;
 }
 
+void Backend::UpdatePipelineImage(PipelineObj pipObj, uint32_t binding,
+                                  ImageObj imgObj, SamplerObj sampObj)
+{
+    Ensure(pipObj.Kind == ObjectKind::Pipeline);
+    Ensure(imgObj.Kind == ObjectKind::Image);
+    Ensure(sampObj.Kind == ObjectKind::Sampler);
+
+    Pipeline& pip = m_Pipelines[pipObj.Id];
+    Ensure(pip.Alive);
+
+    vk::WriteDescriptorSet write = {};
+    write.dstBinding = binding;
+    write.dstSet = pip.Descriptor;
+    write.descriptorType = vk::DescriptorType::eCombinedImageSampler;
+
+    Image& img = m_Images[imgObj.Id];
+    Sampler& samp = m_Samplers[sampObj.Id];
+    Ensure(img.Alive && samp.Alive);
+
+    vk::DescriptorImageInfo imageInfo =
+        vk::DescriptorImageInfo()
+            .setImageView(img.View)
+            .setImageLayout(vk::ImageLayout::eShaderReadOnlyOptimal)
+            .setSampler(samp.Handle);
+    write.setImageInfo({imageInfo});
+
+    m_Device.updateDescriptorSets({write}, {});
+}
+
+SamplerObj Backend::CreateSampler(vk::Filter filter)
+{
+    vk::SamplerCreateInfo samplerInfo = {};
+    samplerInfo.magFilter = filter;
+    samplerInfo.minFilter = filter;
+    samplerInfo.addressModeU = vk::SamplerAddressMode::eRepeat;
+    samplerInfo.addressModeV = vk::SamplerAddressMode::eRepeat;
+    samplerInfo.addressModeW = vk::SamplerAddressMode::eRepeat;
+
+    Sampler samp = {.Alive = true};
+    samp.Handle = m_Device.createSampler(samplerInfo);
+
+    m_Samplers.push_back(samp);
+    return Object(m_Samplers.size() - 1, ObjectKind::Sampler);
+}
+
+ImageObj Backend::CreateImage(vk::Format format, size_t size, uint32_t width,
+                              uint32_t height, uint32_t depth)
+{
+    vk::ImageCreateInfo imgInfo = {};
+    imgInfo.imageType = vk::ImageType::e2D;
+    imgInfo.format = format;
+    imgInfo.extent = vk::Extent3D{width, height, depth};
+    imgInfo.mipLevels = 1;
+    imgInfo.arrayLayers = 1;
+    imgInfo.samples = vk::SampleCountFlagBits::e1;
+    imgInfo.tiling = vk::ImageTiling::eOptimal;
+    imgInfo.usage =
+        vk::ImageUsageFlagBits::eSampled | vk::ImageUsageFlagBits::eTransferDst;
+
+    VmaAllocationCreateInfo allocInfo = {};
+    allocInfo.usage = VMA_MEMORY_USAGE_AUTO;
+
+    Image img = {.Alive = true, .Extent = imgInfo.extent, .Size = size};
+    vmaCreateImage(m_Allocator, (VkImageCreateInfo*)&imgInfo, &allocInfo,
+                   &img.Handle, &img.Allocation, nullptr);
+
+    vk::ImageViewCreateInfo viewInfo = {};
+    viewInfo.image = img.Handle;
+    viewInfo.viewType = vk::ImageViewType::e2D;
+    viewInfo.format = format;
+    viewInfo.subresourceRange = {vk::ImageAspectFlagBits::eColor, 0, 1, 0, 1};
+    img.View = m_Device.createImageView(viewInfo);
+
+    m_Images.push_back(img);
+    return Object(m_Images.size() - 1, ObjectKind::Image);
+}
+
+void Backend::UploadImage(ImageObj obj, size_t size, void* data)
+{
+    Ensure(obj.Kind == ObjectKind::Image);
+
+    Image& img = m_Images[obj.Id];
+    Ensure(img.Alive);
+
+    Buffer staging = {.Alive = true};
+    vk::BufferCreateInfo createInfo = {};
+    createInfo.size = size;
+    createInfo.usage = vk::BufferUsageFlagBits::eTransferSrc;
+
+    VmaAllocationCreateInfo allocInfo = {};
+    allocInfo.usage = VMA_MEMORY_USAGE_AUTO;
+    allocInfo.flags = VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT |
+                      VMA_ALLOCATION_CREATE_MAPPED_BIT;
+
+    vmaCreateBuffer(m_Allocator, (VkBufferCreateInfo*)&createInfo, &allocInfo,
+                    &staging.Handle, &staging.Allocation,
+                    &staging.AllocationInfo);
+
+    memcpy(staging.AllocationInfo.pMappedData, data, size);
+    PerformImmediateTransfer(
+        [&](vk::CommandBuffer cmd)
+        {
+            vk::ImageMemoryBarrier barrier =
+                vk::ImageMemoryBarrier()
+                    .setImage(img.Handle)
+                    .setSrcAccessMask({})
+                    .setDstAccessMask(vk::AccessFlagBits::eTransferWrite)
+                    .setOldLayout(vk::ImageLayout::eUndefined)
+                    .setNewLayout(vk::ImageLayout::eTransferDstOptimal)
+                    .setSubresourceRange(
+                        {vk::ImageAspectFlagBits::eColor, 0, 1, 0, 1});
+            cmd.pipelineBarrier(vk::PipelineStageFlagBits::eTopOfPipe,
+                                vk::PipelineStageFlagBits::eTransfer, {}, {},
+                                {}, {barrier});
+
+            vk::BufferImageCopy region = {};
+            region.imageSubresource = {vk::ImageAspectFlagBits::eColor, 0, 0,
+                                       1};
+            region.imageExtent = img.Extent;
+            cmd.copyBufferToImage(staging.Handle, img.Handle,
+                                  vk::ImageLayout::eTransferDstOptimal,
+                                  {region});
+
+            vk::ImageMemoryBarrier barrierReadable =
+                barrier.setOldLayout(vk::ImageLayout::eTransferDstOptimal)
+                    .setNewLayout(vk::ImageLayout::eShaderReadOnlyOptimal)
+                    .setSrcAccessMask(vk::AccessFlagBits::eTransferWrite)
+                    .setDstAccessMask(vk::AccessFlagBits::eShaderRead);
+            cmd.pipelineBarrier(vk::PipelineStageFlagBits::eTransfer,
+                                vk::PipelineStageFlagBits::eFragmentShader, {},
+                                {}, {}, {barrier});
+        });
+
+    DestroyBuffer(staging);
+}
+
 BufferObj Backend::CreateBuffer(vk::BufferUsageFlags usage, size_t size)
 {
     vk::BufferCreateInfo createInfo = {};
@@ -265,17 +414,17 @@ BufferObj Backend::CreateBuffer(vk::BufferUsageFlags usage, size_t size)
     VmaAllocationCreateInfo allocInfo = {};
     allocInfo.usage = VMA_MEMORY_USAGE_AUTO;
 
-    Buffer buf = {.Alive = true};
+    Buffer buf = {.Alive = true, .Size = size};
     vmaCreateBuffer(m_Allocator, (VkBufferCreateInfo*)&createInfo, &allocInfo,
                     &buf.Handle, &buf.Allocation, &buf.AllocationInfo);
 
     m_Buffers.push_back(buf);
-    return Object(m_Buffers.size() - 1, Object::Kind::Buffer);
+    return Object(m_Buffers.size() - 1, ObjectKind::Buffer);
 }
 
 void Backend::UploadBuffer(BufferObj obj, size_t size, void* data)
 {
-    Ensure(obj.Kind == Object::Kind::Buffer);
+    Ensure(obj.Kind == ObjectKind::Buffer);
 
     Buffer& buf = m_Buffers[obj.Id];
     Ensure(buf.Alive);
@@ -370,6 +519,21 @@ PipelineObj Backend::CreatePipeline(const CreatePipelineInfo& info)
     colorBlending.setAttachments({colorBlendAttachment});
 
     vk::PipelineLayoutCreateInfo pipelineLayoutInfo = {};
+
+    vk::DescriptorSetLayout descriptorLayout = nullptr;
+    vk::DescriptorSet descriptor = nullptr;
+    if (info.Descriptors.size() > 0)
+    {
+        descriptorLayout = m_Device.createDescriptorSetLayout(
+            vk::DescriptorSetLayoutCreateInfo().setBindings(info.Descriptors));
+
+        descriptor = m_Device.allocateDescriptorSets(
+            vk::DescriptorSetAllocateInfo()
+                .setDescriptorPool(m_DescriptorPool)
+                .setSetLayouts({descriptorLayout}))[0];
+        pipelineLayoutInfo.setSetLayouts({descriptorLayout});
+    }
+
     vk::PipelineLayout layout =
         m_Device.createPipelineLayout(pipelineLayoutInfo);
 
@@ -399,8 +563,14 @@ PipelineObj Backend::CreatePipeline(const CreatePipelineInfo& info)
     m_Device.destroyShaderModule(vsMod);
     m_Device.destroyShaderModule(fsMod);
 
-    m_Pipelines.push_back({.Alive = true, .Handle = pip, .Layout = layout});
-    return Object(m_Pipelines.size() - 1, Object::Kind::Pipeline);
+    m_Pipelines.push_back({
+        .Alive = true,
+        .Handle = pip,
+        .Layout = layout,
+        .Descriptor = descriptor,
+        .DescriptorLayout = descriptorLayout,
+    });
+    return Object(m_Pipelines.size() - 1, ObjectKind::Pipeline);
 }
 
 void Backend::DestroySwapchain()
@@ -440,11 +610,17 @@ void Backend::Destroy(Object obj)
 {
     switch (obj.Kind)
     {
-    case Object::Kind::Buffer:
+    case ObjectKind::Buffer:
         DestroyBuffer(m_Buffers[obj.Id]);
         break;
-    case Object::Kind::Pipeline:
+    case ObjectKind::Pipeline:
         DestroyPipeline(m_Pipelines[obj.Id]);
+        break;
+    case ObjectKind::Image:
+        DestroyImage(m_Images[obj.Id]);
+        break;
+    case ObjectKind::Sampler:
+        DestroySampler(m_Samplers[obj.Id]);
         break;
     }
 }
@@ -455,6 +631,7 @@ void Backend::DestroyPipeline(Pipeline& pip)
     {
         m_Device.destroyPipeline(pip.Handle);
         m_Device.destroyPipelineLayout(pip.Layout);
+        m_Device.destroyDescriptorSetLayout(pip.DescriptorLayout);
         pip.Alive = false;
     }
 }
@@ -465,6 +642,25 @@ void Backend::DestroyBuffer(Buffer& buf)
     {
         vmaDestroyBuffer(m_Allocator, buf.Handle, buf.Allocation);
         buf.Alive = false;
+    }
+}
+
+void Backend::DestroySampler(Sampler& samp)
+{
+    if (samp.Alive)
+    {
+        m_Device.destroySampler(samp.Handle);
+        samp.Alive = false;
+    }
+}
+
+void Backend::DestroyImage(Image& img)
+{
+    if (img.Alive)
+    {
+        m_Device.destroyImageView(img.View);
+        vmaDestroyImage(m_Allocator, img.Handle, img.Allocation);
+        img.Alive = false;
     }
 }
 
@@ -479,6 +675,12 @@ Backend::~Backend()
         DestroyPipeline(pip);
     for (Buffer& buf : m_Buffers)
         DestroyBuffer(buf);
+    for (Image& buf : m_Images)
+        DestroyImage(buf);
+    for (Sampler& buf : m_Samplers)
+        DestroySampler(buf);
+
+    m_Device.destroyDescriptorPool(m_DescriptorPool);
 
     vmaDestroyAllocator(m_Allocator);
     DestroySwapchain();

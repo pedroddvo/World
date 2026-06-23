@@ -11,25 +11,30 @@
 namespace gfx
 {
 
+enum class ObjectKind
+{
+    Buffer,
+    Pipeline,
+    Image,
+    Sampler
+};
+
 struct Object
 {
-  private:
-    enum class Kind
-    {
-        Buffer,
-        Pipeline
-    };
 
-    Object(uint32_t id, Kind kind) : Id(id), Kind(kind) {}
+  private:
+    Object(uint32_t id, ObjectKind kind) : Id(id), Kind(kind) {}
 
     uint32_t Id;
-    Kind Kind;
+    ObjectKind Kind;
 
     friend class Backend;
 };
 
 using BufferObj = Object;
 using PipelineObj = Object;
+using ImageObj = Object;
+using SamplerObj = Object;
 
 struct CreatePipelineInfo
 {
@@ -38,6 +43,8 @@ struct CreatePipelineInfo
 
     std::initializer_list<vk::VertexInputBindingDescription> Bindings = {};
     std::initializer_list<vk::VertexInputAttributeDescription> Attributes = {};
+
+    std::initializer_list<vk::DescriptorSetLayoutBinding> Descriptors = {};
 };
 
 class Backend
@@ -66,7 +73,15 @@ class Backend
     BufferObj CreateBuffer(vk::BufferUsageFlags usage, size_t size);
     void UploadBuffer(BufferObj obj, size_t size, void* data);
 
+    ImageObj CreateImage(vk::Format format, size_t size, uint32_t width,
+                         uint32_t height, uint32_t depth = 1);
+    void UploadImage(ImageObj obj, size_t size, void* data);
+
+    SamplerObj CreateSampler(vk::Filter filter);
+
     PipelineObj CreatePipeline(const CreatePipelineInfo& info);
+    void UpdatePipelineImage(PipelineObj pip, uint32_t binding, ImageObj img,
+                             SamplerObj samp);
 
   private:
     void DestroySwapchain();
@@ -103,24 +118,49 @@ class Backend
 
     VmaAllocator m_Allocator = {};
 
+    VkDescriptorPool m_DescriptorPool = {};
+
     struct Buffer
     {
         bool Alive = false;
         VkBuffer Handle = {};
         VmaAllocation Allocation = {};
         VmaAllocationInfo AllocationInfo = {};
+        size_t Size = 0;
     };
     std::vector<Buffer> m_Buffers = {};
     void DestroyBuffer(Buffer& buf);
+
+    struct Image
+    {
+        bool Alive = false;
+        VkImage Handle = {};
+        VkImageView View = {};
+        VkExtent3D Extent = {};
+        VmaAllocation Allocation = {};
+        size_t Size = 0;
+    };
+    std::vector<Image> m_Images = {};
+    void DestroyImage(Image& img);
 
     struct Pipeline
     {
         bool Alive = false;
         VkPipeline Handle = {};
         VkPipelineLayout Layout = {};
+        VkDescriptorSet Descriptor = {};
+	VkDescriptorSetLayout DescriptorLayout = {};
     };
     std::vector<Pipeline> m_Pipelines = {};
     void DestroyPipeline(Pipeline& pip);
+
+    struct Sampler
+    {
+        bool Alive = false;
+        VkSampler Handle = {};
+    };
+    std::vector<Sampler> m_Samplers = {};
+    void DestroySampler(Sampler& samp);
 
     void PerformImmediateTransfer(std::function<void(vk::CommandBuffer)> proc);
 };
