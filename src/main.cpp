@@ -9,16 +9,16 @@ static std::vector<uint8_t> GenerateNoise(const noise::PerlinConfig& noiseCfg)
 {
 
     std::vector<uint8_t> data = {};
-    
+
     for (int j = 0; j < 600; j++)
     {
         for (int i = 0; i < 800; i++)
         {
-            float v = noise::Perlin2D({i / 800.0f * 16.0f, j / 600.0f * 16.0f},
-                                      noiseCfg);
+            float v = noise::Perlin2D({i / 800.0f, j / 600.0f}, noiseCfg);
             v = (v + 0.7071f) / 1.4142f;
 
-            uint8_t pixel = static_cast<uint8_t>(v * 255.0f);
+            uint8_t pixel =
+                static_cast<uint8_t>(glm::clamp(v * 255.0f, 0.0f, 255.0f));
             data.insert(data.end(), {pixel, pixel, pixel, 255});
         }
     }
@@ -85,10 +85,18 @@ int main()
         uint32_t fi = backend.FrameBegin();
 
         ImGui::Text("%f", dt);
+        ImGui::SliderFloat("Frequency", &noiseCfg.Frequency, 0.1, 16.0);
+        ImGui::SliderFloat("Amplitude", &noiseCfg.Amplitude, 0.1, 16.0);
+
+        uint32_t octMin = 1, octMax = 4;
+        ImGui::SliderScalar("Octaves", ImGuiDataType_U32, &noiseCfg.Octaves,
+                            &octMin, &octMax);
+        ImGui::SliderFloat("Lacunarity", &noiseCfg.Lacunarity, 0.1, 16.0);
+        ImGui::SliderFloat("Gain", &noiseCfg.Gain, 0.1, 16.0);
+
         if (ImGui::Button("Noise"))
         {
-            noiseCfg.seed += 1;
-	    data = GenerateNoise(noiseCfg);
+            data = GenerateNoise(noiseCfg);
             backend.UploadImage(image, data.size() * sizeof(uint8_t),
                                 data.data());
         }
