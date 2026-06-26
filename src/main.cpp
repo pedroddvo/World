@@ -39,22 +39,17 @@ int main()
         vk::BufferUsageFlagBits::eVertexBuffer, sizeof(vertices));
     backend.UploadBuffer(buf, sizeof(vertices), vertices);
 
-    FILE* fp = fopen("out.ppm", "wb");
-    fprintf(fp, "P3\n%d %d\n255\n", 800, 600);
     std::vector<uint8_t> data = {};
     for (int j = 0; j < 600; j++)
     {
         for (int i = 0; i < 800; i++)
         {
-            uint8_t v = (uint8_t)(noise::Perlin2D({i / 800.0f * 16.0f,
-                                                   j / 600.0f * 16.0f}) *
+            uint8_t v = (uint8_t)(noise::Perlin2D({i / 800.0f * 32.0f,
+                                                   j / 600.0f * 32.0f}) *
                                   255);
-            fprintf(fp, "%d %d %d ", v, v, v);
             data.insert(data.end(), {v, v, v, 255});
         }
-        fprintf(fp, "\n");
     }
-    fclose(fp);
 
     gfx::ImageObj image = backend.CreateImage(
         vk::Format::eR8G8B8A8Srgb, data.size() * sizeof(uint8_t), 800, 600);

@@ -1,4 +1,5 @@
 #include "util.hpp"
+#include <vulkan/vulkan_core.h>
 #define VULKAN_HPP_DISPATCH_LOADER_DYNAMIC 1
 
 #include <VkBootstrap.h>
@@ -8,6 +9,10 @@
 #include <vulkan/vulkan_handles.hpp>
 #include <vulkan/vulkan_hpp_macros.hpp>
 #include <vulkan/vulkan_structs.hpp>
+
+#include <imgui.h>
+#include <imgui_impl_glfw.h>
+#include <imgui_impl_vulkan.h>
 
 #include "GLFW/glfw3.h"
 #include "gfx.hpp"
@@ -154,10 +159,56 @@ Backend::Backend(GLFWwindow* window) : m_Window(window)
             .setCommandBufferCount(1)
             .setLevel(vk::CommandBufferLevel::ePrimary))[0];
 
-    std::initializer_list<vk::DescriptorPoolSize> poolSizes = {
+    vk::DescriptorPoolSize poolSizes[] = {
         {vk::DescriptorType::eCombinedImageSampler, 10}};
     m_DescriptorPool = m_Device.createDescriptorPool(
         vk::DescriptorPoolCreateInfo().setMaxSets(10).setPoolSizes(poolSizes));
+
+    InitImgui();
+}
+
+void Backend::InitImgui()
+{
+    vk::DescriptorPoolSize poolSizes[] = {
+        {vk::DescriptorType::eSampler, 1000},
+        {vk::DescriptorType::eCombinedImageSampler, 1000},
+        {vk::DescriptorType::eSampledImage, 1000},
+        {vk::DescriptorType::eStorageImage, 1000},
+        {vk::DescriptorType::eUniformTexelBuffer, 1000},
+        {vk::DescriptorType::eStorageTexelBuffer, 1000},
+        {vk::DescriptorType::eUniformBuffer, 1000},
+        {vk::DescriptorType::eStorageBuffer, 1000},
+        {vk::DescriptorType::eUniformBufferDynamic, 1000},
+        {vk::DescriptorType::eStorageBufferDynamic, 1000},
+        {vk::DescriptorType::eInputAttachment, 1000}};
+    m_ImguiPool = m_Device.createDescriptorPool(
+        vk::DescriptorPoolCreateInfo()
+            .setMaxSets(1000)
+            .setPoolSizes(poolSizes)
+            .setFlags(vk::DescriptorPoolCreateFlagBits::eFreeDescriptorSet));
+
+    IMGUI_CHECKVERSION();
+    ImGui::CreateContext();
+    ImGuiIO& io = ImGui::GetIO();
+
+    // Setup Platform/Renderer backends
+    ImGui_ImplGlfw_InitForVulkan(m_Window, true);
+    ImGui_ImplVulkan_InitInfo imguiInfo = {};
+    imguiInfo.Instance = m_Instance;
+    imguiInfo.PhysicalDevice = m_Gpu;
+    imguiInfo.Device = m_Device;
+    imguiInfo.QueueFamily = m_GfxIndex;
+    imguiInfo.Queue = m_GfxQueue;
+    imguiInfo.DescriptorPool = m_ImguiPool;
+    imguiInfo.MinImageCount = 2;
+    imguiInfo.ImageCount = 2;
+    imguiInfo.CheckVkResultFn = [](VkResult r) { EnsureVk(r); };
+    imguiInfo.UseDynamicRendering = true;
+
+    imguiInfo.PipelineInfoMain.PipelineRenderingCreateInfo =
+        (VkPipelineRenderingCreateInfo)vk::PipelineRenderingCreateInfo()
+            .setColorAttachmentFormats({m_SwcImageFormat});
+    ImGui_ImplVulkan_Init(&imguiInfo);
 }
 
 void Backend::BindVertexBuffer(BufferObj buf)
@@ -192,6 +243,11 @@ uint32_t Backend::FrameBegin()
     EnsureVk(m_Device.waitForFences({m_WaitFences[m_CurrentFrame]}, true,
                                     UINT64_MAX));
     m_Device.resetFences({m_WaitFences[m_CurrentFrame]});
+
+    ImGui_ImplVulkan_NewFrame();
+    ImGui_ImplGlfw_NewFrame();
+    ImGui::NewFrame();
+    ImGui::ShowDemoWindow();
 
     uint32_t imageIndex = EnsureVk(m_Device.acquireNextImageKHR(
         m_Swapchain, UINT64_MAX, m_PresentCompleteSemas[m_CurrentFrame]));
@@ -234,6 +290,8 @@ void Backend::FrameEnd(uint32_t imageIndex)
 {
     vk::CommandBuffer cmd = m_FrameCommands[m_CurrentFrame];
 
+    ImGui::Render();
+    ImGui_ImplVulkan_RenderDrawData(ImGui::GetDrawData(), cmd);
     cmd.endRenderingKHR();
 
     vk::ImageMemoryBarrier barrier =
@@ -668,6 +726,10 @@ Backend::~Backend()
 {
     m_Device.waitIdle();
 
+    ImGui_ImplVulkan_Shutdown();
+    ImGui_ImplGlfw_Shutdown();
+    ImGui::DestroyContext();
+
     m_Device.destroyCommandPool(m_TransferPool);
     m_Device.destroyFence(m_TransferFence);
 
@@ -681,6 +743,7 @@ Backend::~Backend()
         DestroySampler(buf);
 
     m_Device.destroyDescriptorPool(m_DescriptorPool);
+    m_Device.destroyDescriptorPool(m_ImguiPool);
 
     vmaDestroyAllocator(m_Allocator);
     DestroySwapchain();

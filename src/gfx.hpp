@@ -85,6 +85,7 @@ class Backend
 
   private:
     void DestroySwapchain();
+    void InitImgui();
 
     GLFWwindow* m_Window = nullptr;
 
@@ -119,6 +120,7 @@ class Backend
     VmaAllocator m_Allocator = {};
 
     VkDescriptorPool m_DescriptorPool = {};
+    VkDescriptorPool m_ImguiPool = {};
 
     struct Buffer
     {
