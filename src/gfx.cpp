@@ -247,7 +247,6 @@ uint32_t Backend::FrameBegin()
     ImGui_ImplVulkan_NewFrame();
     ImGui_ImplGlfw_NewFrame();
     ImGui::NewFrame();
-    ImGui::ShowDemoWindow();
 
     uint32_t imageIndex = EnsureVk(m_Device.acquireNextImageKHR(
         m_Swapchain, UINT64_MAX, m_PresentCompleteSemas[m_CurrentFrame]));

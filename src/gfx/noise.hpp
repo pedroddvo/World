@@ -3,5 +3,12 @@
 
 namespace noise
 {
-float Perlin2D(glm::vec2 v);
+
+struct PerlinConfig
+{
+    uint32_t seed = 0;
+};
+
+float Perlin2D(glm::vec2 v, const PerlinConfig& cfg);
+
 }
