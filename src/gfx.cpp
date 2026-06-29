@@ -211,6 +211,13 @@ void Backend::InitImgui()
     ImGui_ImplVulkan_Init(&imguiInfo);
 }
 
+void Backend::BindPushConstant(PipelineObj pip, vk::ShaderStageFlags stageFlags,
+                               void* data, size_t size)
+{
+    m_FrameCommands[m_CurrentFrame].pushConstants(m_Pipelines[pip.Id].Layout,
+                                                  stageFlags, 0, size, data);
+}
+
 void Backend::BindVertexBuffer(BufferObj buf)
 {
     m_FrameCommands[m_CurrentFrame].bindVertexBuffers(
@@ -592,6 +599,7 @@ PipelineObj Backend::CreatePipeline(const CreatePipelineInfo& info)
     colorBlending.setAttachments({colorBlendAttachment});
 
     vk::PipelineLayoutCreateInfo pipelineLayoutInfo = {};
+    pipelineLayoutInfo.setPushConstantRanges(info.PushConstants);
 
     vk::DescriptorSetLayout descriptorLayout = nullptr;
     vk::DescriptorSet descriptor = nullptr;

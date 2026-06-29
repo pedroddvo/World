@@ -1,9 +1,14 @@
+#include "camera.hpp"
 #include "gfx.hpp"
 #include "gfx/noise.hpp"
 #include "imgui.h"
 #include "util.hpp"
 #include <GLFW/glfw3.h>
 #include <stdio.h>
+#include <vulkan/vulkan_enums.hpp>
+
+static void KeyCallback(GLFWwindow* window, int key, int scancode, int action,
+                        int mods);
 
 static std::vector<uint8_t> GenerateNoise(const noise::PerlinConfig& noiseCfg)
 {
@@ -26,6 +31,9 @@ static std::vector<uint8_t> GenerateNoise(const noise::PerlinConfig& noiseCfg)
     return data;
 }
 
+Camera g_Camera = {{0.0f, 0.0f, 2.0f}};
+FlyController g_FlyController = {};
+
 int main()
 {
     Ensure(glfwInit(), "failed to initialize glfw");
@@ -33,6 +41,7 @@ int main()
 
     GLFWwindow* window = glfwCreateWindow(800, 600, "vox", nullptr, nullptr);
     Ensure(window != nullptr, "failed to create window");
+    glfwSetKeyCallback(window, KeyCallback);
 
     gfx::Backend backend = gfx::Backend(window);
     gfx::PipelineObj pip = backend.CreatePipeline({
@@ -44,6 +53,8 @@ int main()
         .Descriptors = {vk::DescriptorSetLayoutBinding{
             0, vk::DescriptorType::eCombinedImageSampler, 1,
             vk::ShaderStageFlagBits::eFragment}},
+        .PushConstants = {vk::PushConstantRange{
+            vk::ShaderStageFlagBits::eVertex, 0, sizeof(glm::mat4)}},
     });
 
     float vertices[] = {
@@ -106,16 +117,38 @@ int main()
         ImGui::End();
 
         ImGui::Begin("Noise");
-	ImVec2 availSize = ImGui::GetContentRegionAvail();
+        ImVec2 availSize = ImGui::GetContentRegionAvail();
         backend.DrawImageImGui(image, availSize.x, availSize.y);
         ImGui::End();
 
-        // backend.BindPipeline(pip);
-        // backend.BindVertexBuffer(buf);
-        // backend.Draw(6, 1);
+	g_FlyController.Update(&g_Camera, dt);
+        glm::mat4 mvp = g_Camera.ViewProjection(800.0f / 600.0f);
+
+        backend.BindPipeline(pip);
+        backend.BindPushConstant(pip, vk::ShaderStageFlagBits::eVertex, &mvp,
+                                 sizeof(glm::mat4));
+        backend.BindVertexBuffer(buf);
+        backend.Draw(6, 1);
         backend.FrameEnd(fi);
     }
 
     glfwDestroyWindow(window);
     glfwTerminate();
+}
+
+static void KeyCallback(GLFWwindow* window, int key, int scancode, int action,
+                        int mods)
+{
+    bool down = action == GLFW_PRESS;
+
+    switch (key)
+    { // clang-format off
+    case GLFW_KEY_W:		g_FlyController.Forward		= down; break;
+    case GLFW_KEY_S:		g_FlyController.Backward	= down; break;
+    case GLFW_KEY_D:		g_FlyController.Right		= down; break;
+    case GLFW_KEY_A:		g_FlyController.Left		= down; break;
+    case GLFW_KEY_SPACE:	g_FlyController.Up		= down; break;
+    case GLFW_KEY_LEFT_SHIFT:	g_FlyController.Down		= down; break;
+							     
+    } // clang-format on
 }

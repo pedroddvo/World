@@ -6,7 +6,9 @@
 #include <GLFW/glfw3.h>
 #include <vk_mem_alloc.h>
 #include <vulkan/vulkan_core.h>
+#include <vulkan/vulkan_enums.hpp>
 #include <vulkan/vulkan_handles.hpp>
+#include <vulkan/vulkan_structs.hpp>
 
 namespace gfx
 {
@@ -45,6 +47,7 @@ struct CreatePipelineInfo
     std::initializer_list<vk::VertexInputAttributeDescription> Attributes = {};
 
     std::initializer_list<vk::DescriptorSetLayoutBinding> Descriptors = {};
+    std::initializer_list<vk::PushConstantRange> PushConstants = {};
 };
 
 class Backend
@@ -63,6 +66,7 @@ class Backend
 
     void BindVertexBuffer(BufferObj buf);
     void BindPipeline(PipelineObj pip);
+    void BindPushConstant(PipelineObj pip, vk::ShaderStageFlags stageFlags, void* data, size_t size);
 
     void Draw(uint32_t vertexCount, uint32_t instanceCount,
               uint32_t firstVertex = 0, uint32_t firstInstance = 0);

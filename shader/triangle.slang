@@ -8,9 +8,9 @@ struct vs_output {
 };
 
 [shader("vertex")]
-vs_output vertex_main(vs_input input) {
+vs_output vertex_main(vs_input input, uniform float4x4 mvp) {
     vs_output output;
-    output.pos = float4(input.pos.xy, 0.0, 1.0);
+    output.pos = mul(mvp, float4(input.pos.xy, 0.0, 1.0));
     output.uv = input.pos.zw;
     return output;
 }
