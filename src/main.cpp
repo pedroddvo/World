@@ -9,30 +9,58 @@
 
 static void KeyCallback(GLFWwindow* window, int key, int scancode, int action,
                         int mods);
+static void MouseCallback(GLFWwindow* window, double xpos, double ypos);
 
-static std::vector<uint8_t> GenerateNoise(const noise::PerlinConfig& noiseCfg)
+struct GenerateNoiseResult
 {
+    std::vector<glm::vec3> Vertices = {};
+    std::vector<uint32_t> Indices = {};
+    std::vector<uint8_t> Data = {};
+};
 
+static GenerateNoiseResult GenerateNoise(const noise::PerlinConfig& noiseCfg)
+{
+    std::vector<glm::vec3> vertices = {};
+    std::vector<uint32_t> indices = {};
     std::vector<uint8_t> data = {};
 
-    for (int j = 0; j < 600; j++)
+    for (int y = 0; y < 800; y++)
     {
-        for (int i = 0; i < 800; i++)
+        for (int x = 0; x < 800; x++)
         {
-            float v = noise::Perlin2D({i / 800.0f, j / 600.0f}, noiseCfg);
+            float v = noise::Perlin2D({x / 800.0f, y / 800.0f}, noiseCfg);
             v = (v + 0.7071f) / 1.4142f;
 
             uint8_t pixel =
                 static_cast<uint8_t>(glm::clamp(v * 255.0f, 0.0f, 255.0f));
             data.insert(data.end(), {pixel, pixel, pixel, 255});
+
+	    
+            vertices.push_back({x - 400, -v*100.0f, y - 400});
         }
     }
 
-    return data;
+    for (int y = 0; y < 799; y++)
+    {
+        for (int x = 0; x < 799; x++)
+        {
+            uint32_t i = y * 800 + x;
+
+            indices.push_back(i);
+            indices.push_back(i + 800);
+            indices.push_back(i + 1);
+
+            indices.push_back(i + 1);
+            indices.push_back(i + 800);
+            indices.push_back(i + 801);
+        }
+    }
+
+    return {vertices, indices, data};
 }
 
 Camera g_Camera = {{0.0f, 0.0f, 2.0f}};
-FlyController g_FlyController = {};
+FlyController g_FlyController = {.Speed = 100.0f};
 
 int main()
 {
@@ -42,14 +70,16 @@ int main()
     GLFWwindow* window = glfwCreateWindow(800, 600, "vox", nullptr, nullptr);
     Ensure(window != nullptr, "failed to create window");
     glfwSetKeyCallback(window, KeyCallback);
+    glfwSetCursorPosCallback(window, MouseCallback);
+    glfwSetInputMode(window, GLFW_CURSOR, GLFW_CURSOR_DISABLED);
 
     gfx::Backend backend = gfx::Backend(window);
     gfx::PipelineObj pip = backend.CreatePipeline({
         .VertexShader = "shader/triangle.vert.spv",
         .FragmentShader = "shader/triangle.frag.spv",
 
-        .Bindings = {{0, sizeof(float) * 4}},
-        .Attributes = {{0, 0, vk::Format::eR32G32B32A32Sfloat}},
+        .Bindings = {{0, sizeof(float) * 3}},
+        .Attributes = {{0, 0, vk::Format::eR32G32B32Sfloat}},
         .Descriptors = {vk::DescriptorSetLayoutBinding{
             0, vk::DescriptorType::eCombinedImageSampler, 1,
             vk::ShaderStageFlagBits::eFragment}},
@@ -57,29 +87,24 @@ int main()
             vk::ShaderStageFlagBits::eVertex, 0, sizeof(glm::mat4)}},
     });
 
-    float vertices[] = {
-        // X,     Y,     U,     V
-        -1.0f, -1.0f, 0.0f, 0.0f, // Top-Left
-        1.0f,  -1.0f, 1.0f, 0.0f, // Top-Right
-        -1.0f, 1.0f,  0.0f, 1.0f, // Bottom-Left
-        1.0f,  1.0f,  1.0f, 1.0f, // Bottom-Right
-    };
-
-    gfx::BufferObj vertexBuf = backend.CreateBuffer(
-        vk::BufferUsageFlagBits::eVertexBuffer, sizeof(vertices));
-    backend.UploadBuffer(vertexBuf, sizeof(vertices), vertices);
-
-    uint16_t indices[] = {0, 2, 1, 1, 3, 2};
-    gfx::BufferObj indexBuf = backend.CreateBuffer(
-        vk::BufferUsageFlagBits::eIndexBuffer, sizeof(indices));
-    backend.UploadBuffer(indexBuf, sizeof(indices), indices);
-
     noise::PerlinConfig noiseCfg = {};
-    std::vector<uint8_t> data = GenerateNoise(noiseCfg);
+    GenerateNoiseResult gnr = GenerateNoise(noiseCfg);
 
     gfx::ImageObj image = backend.CreateImage(
-        vk::Format::eR8G8B8A8Srgb, data.size() * sizeof(uint8_t), 800, 600);
-    backend.UploadImage(image, data.size() * sizeof(uint8_t), data.data());
+        vk::Format::eR8G8B8A8Srgb, gnr.Data.size() * sizeof(uint8_t), 800, 800);
+    backend.UploadImage(image, gnr.Data.size() * sizeof(uint8_t),
+                        gnr.Data.data());
+
+    gfx::BufferObj vertexBuf =
+        backend.CreateBuffer(vk::BufferUsageFlagBits::eVertexBuffer,
+                             sizeof(glm::vec3) * gnr.Vertices.size());
+    gfx::BufferObj indexBuf =
+        backend.CreateBuffer(vk::BufferUsageFlagBits::eIndexBuffer,
+                             sizeof(uint32_t) * gnr.Indices.size());
+    backend.UploadBuffer(indexBuf, sizeof(uint32_t) * gnr.Indices.size(),
+                         gnr.Indices.data());
+    backend.UploadBuffer(vertexBuf, sizeof(glm::vec3) * gnr.Vertices.size(),
+                         gnr.Vertices.data());
 
     gfx::SamplerObj samp = backend.CreateSampler(vk::Filter::eLinear);
     backend.UpdatePipelineImage(pip, 0, image, samp);
@@ -109,9 +134,15 @@ int main()
 
         if (ImGui::Button("Noise"))
         {
-            data = GenerateNoise(noiseCfg);
-            backend.UploadImage(image, data.size() * sizeof(uint8_t),
-                                data.data());
+            gnr = GenerateNoise(noiseCfg);
+            backend.UploadImage(image, gnr.Data.size() * sizeof(uint8_t),
+                                gnr.Data.data());
+            backend.UploadBuffer(indexBuf,
+                                 sizeof(uint32_t) * gnr.Indices.size(),
+                                 gnr.Indices.data());
+            backend.UploadBuffer(vertexBuf,
+                                 sizeof(glm::vec3) * gnr.Vertices.size(),
+                                 gnr.Vertices.data());
         }
 
         ImGui::End();
@@ -128,8 +159,8 @@ int main()
         backend.BindPushConstant(pip, vk::ShaderStageFlagBits::eVertex, &mvp,
                                  sizeof(glm::mat4));
         backend.BindVertexBuffer(vertexBuf);
-        backend.BindIndexBuffer(indexBuf, vk::IndexType::eUint16);
-        backend.DrawIndexed(6, 1);
+        backend.BindIndexBuffer(indexBuf, vk::IndexType::eUint32);
+        backend.DrawIndexed(gnr.Indices.size(), 1);
         backend.FrameEnd(fi);
     }
 
@@ -145,13 +176,34 @@ static void KeyCallback(GLFWwindow* window, int key, int scancode, int action,
     if (down || action == GLFW_RELEASE)
     {
         switch (key)
-        { // clang-format off
-	case GLFW_KEY_W:		g_FlyController.Forward		= down; break;
-	case GLFW_KEY_S:		g_FlyController.Backward	= down; break;
-	case GLFW_KEY_D:		g_FlyController.Right		= down; break;
-	case GLFW_KEY_A:		g_FlyController.Left		= down; break;
-	case GLFW_KEY_SPACE:	        g_FlyController.Up		= down; break;
-	case GLFW_KEY_LEFT_SHIFT:	g_FlyController.Down		= down; break;
-	} // clang-format on
+        {
+        case GLFW_KEY_M:
+            if (action == GLFW_RELEASE)
+                break;
+
+            glfwSetInputMode(window, GLFW_CURSOR,
+                             glfwGetInputMode(window, GLFW_CURSOR) ==
+                                     GLFW_CURSOR_DISABLED
+                                 ? GLFW_CURSOR_NORMAL
+                                 : GLFW_CURSOR_DISABLED);
+            break;
+
+            // clang-format off
+	case GLFW_KEY_W:	  g_FlyController.Forward	= down; break;
+	case GLFW_KEY_S:	  g_FlyController.Backward	= down; break;
+	case GLFW_KEY_D:	  g_FlyController.Right		= down; break;
+	case GLFW_KEY_A:	  g_FlyController.Left		= down; break;
+	case GLFW_KEY_SPACE:	  g_FlyController.Up		= down; break;
+	case GLFW_KEY_LEFT_SHIFT: g_FlyController.Down		= down; break;
+            // clang-format on
+        }
     }
+}
+
+glm::vec2 g_LastMouse = {400.0f, 300.0f};
+static void MouseCallback(GLFWwindow* window, double xpos, double ypos)
+{
+    glm::vec2 delta = {xpos - g_LastMouse.x, ypos - g_LastMouse.y};
+    g_LastMouse = {xpos, ypos};
+    g_FlyController.MoveMouse(&g_Camera, delta);
 }

@@ -11,7 +11,7 @@ class Camera
     glm::vec3 Right = {}, Up = {};
 
     float Yaw = -90.0f, Pitch = 0.0f;
-    float Fov = 45.0f, Znear = 0.1f, Zfar = 100.0f;
+    float Fov = 45.0f, Znear = 0.1f, Zfar = 1000.0f;
 
     Camera(glm::vec3 pos = {0.0f, 0.0f, 0.0f}) : Position(pos)
     {
@@ -35,6 +35,8 @@ class Camera
         Right = glm::normalize(glm::cross(Front, WorldUp));
         Up = glm::normalize(glm::cross(Right, Front));
     }
+
+    friend class FlyController;
 };
 
 struct FlyController
@@ -51,5 +53,14 @@ struct FlyController
         cam->Position += cam->Front * (Forward ? v : Backward ? -v : 0.0f);
         cam->Position += cam->Up * (Up ? -v : Down ? v : 0.0f);
         cam->Position += cam->Right * (Right ? v : Left ? -v : 0.0f);
+    }
+
+    void MoveMouse(Camera* cam, glm::vec2 delta)
+    {
+	delta *= Sensitivity;
+	cam->Yaw += delta.x;
+	cam->Pitch += delta.y;
+	cam->Pitch = glm::clamp(cam->Pitch, -89.0f, 89.0f);
+	cam->UpdateVectors();
     }
 };
