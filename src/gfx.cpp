@@ -403,6 +403,20 @@ ImageObj Backend::CreateImage(vk::Format format, size_t size, uint32_t width,
     return Object(m_Images.size() - 1, ObjectKind::Image);
 }
 
+void Backend::DrawImageImGui(ImageObj obj)
+{
+    Image& img = m_Images[obj.Id];
+
+    if (img.ImGuiDescriptor == nullptr)
+    {
+        img.ImGuiDescriptor = ImGui_ImplVulkan_AddTexture(
+            img.View, (VkImageLayout)vk::ImageLayout::eShaderReadOnlyOptimal);
+    }
+
+    ImGui::Image((ImTextureID)img.ImGuiDescriptor,
+                 ImVec2(img.Extent.width, img.Extent.height));
+}
+
 void Backend::UploadImage(ImageObj obj, size_t size, void* data)
 {
     Ensure(obj.Kind == ObjectKind::Image);
@@ -717,6 +731,8 @@ void Backend::DestroyImage(Image& img)
     {
         m_Device.destroyImageView(img.View);
         vmaDestroyImage(m_Allocator, img.Handle, img.Allocation);
+        if (img.ImGuiDescriptor)
+            ImGui_ImplVulkan_RemoveTexture(img.ImGuiDescriptor);
         img.Alive = false;
     }
 }
@@ -724,10 +740,6 @@ void Backend::DestroyImage(Image& img)
 Backend::~Backend()
 {
     m_Device.waitIdle();
-
-    ImGui_ImplVulkan_Shutdown();
-    ImGui_ImplGlfw_Shutdown();
-    ImGui::DestroyContext();
 
     m_Device.destroyCommandPool(m_TransferPool);
     m_Device.destroyFence(m_TransferFence);
@@ -740,6 +752,10 @@ Backend::~Backend()
         DestroyImage(buf);
     for (Sampler& buf : m_Samplers)
         DestroySampler(buf);
+
+    ImGui_ImplVulkan_Shutdown();
+    ImGui_ImplGlfw_Shutdown();
+    ImGui::DestroyContext();
 
     m_Device.destroyDescriptorPool(m_DescriptorPool);
     m_Device.destroyDescriptorPool(m_ImguiPool);

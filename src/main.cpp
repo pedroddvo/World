@@ -101,9 +101,10 @@ int main()
                                 data.data());
         }
 
-        backend.BindPipeline(pip);
-        backend.BindVertexBuffer(buf);
-        backend.Draw(6, 1);
+        backend.DrawImageImGui(image);
+        // backend.BindPipeline(pip);
+        // backend.BindVertexBuffer(buf);
+        // backend.Draw(6, 1);
         backend.FrameEnd(fi);
     }
 

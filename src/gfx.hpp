@@ -76,6 +76,7 @@ class Backend
     ImageObj CreateImage(vk::Format format, size_t size, uint32_t width,
                          uint32_t height, uint32_t depth = 1);
     void UploadImage(ImageObj obj, size_t size, void* data);
+    void DrawImageImGui(ImageObj obj);
 
     SamplerObj CreateSampler(vk::Filter filter);
 
@@ -140,6 +141,7 @@ class Backend
         VkImageView View = {};
         VkExtent3D Extent = {};
         VmaAllocation Allocation = {};
+        VkDescriptorSet ImGuiDescriptor = {};
         size_t Size = 0;
     };
     std::vector<Image> m_Images = {};
@@ -151,7 +153,7 @@ class Backend
         VkPipeline Handle = {};
         VkPipelineLayout Layout = {};
         VkDescriptorSet Descriptor = {};
-	VkDescriptorSetLayout DescriptorLayout = {};
+        VkDescriptorSetLayout DescriptorLayout = {};
     };
     std::vector<Pipeline> m_Pipelines = {};
     void DestroyPipeline(Pipeline& pip);
