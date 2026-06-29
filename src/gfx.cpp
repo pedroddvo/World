@@ -403,7 +403,7 @@ ImageObj Backend::CreateImage(vk::Format format, size_t size, uint32_t width,
     return Object(m_Images.size() - 1, ObjectKind::Image);
 }
 
-void Backend::DrawImageImGui(ImageObj obj)
+void Backend::DrawImageImGui(ImageObj obj, uint32_t width, uint32_t height)
 {
     Image& img = m_Images[obj.Id];
 
@@ -414,7 +414,9 @@ void Backend::DrawImageImGui(ImageObj obj)
     }
 
     ImGui::Image((ImTextureID)img.ImGuiDescriptor,
-                 ImVec2(img.Extent.width, img.Extent.height));
+                 (width && height)
+                     ? ImVec2(width, height)
+                     : ImVec2(img.Extent.width, img.Extent.height));
 }
 
 void Backend::UploadImage(ImageObj obj, size_t size, void* data)

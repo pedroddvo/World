@@ -76,7 +76,7 @@ class Backend
     ImageObj CreateImage(vk::Format format, size_t size, uint32_t width,
                          uint32_t height, uint32_t depth = 1);
     void UploadImage(ImageObj obj, size_t size, void* data);
-    void DrawImageImGui(ImageObj obj);
+    void DrawImageImGui(ImageObj obj, uint32_t width = 0, uint32_t height = 0);
 
     SamplerObj CreateSampler(vk::Filter filter);
 

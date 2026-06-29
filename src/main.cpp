@@ -84,15 +84,17 @@ int main()
 
         uint32_t fi = backend.FrameBegin();
 
+        ImGui::Begin("Noise Parameters");
+
         ImGui::Text("%f", dt);
         ImGui::SliderFloat("Frequency", &noiseCfg.Frequency, 0.1, 16.0);
-        ImGui::SliderFloat("Amplitude", &noiseCfg.Amplitude, 0.1, 16.0);
+        ImGui::SliderFloat("Amplitude", &noiseCfg.Amplitude, 0.1, 2.0);
 
         uint32_t octMin = 1, octMax = 4;
         ImGui::SliderScalar("Octaves", ImGuiDataType_U32, &noiseCfg.Octaves,
                             &octMin, &octMax);
         ImGui::SliderFloat("Lacunarity", &noiseCfg.Lacunarity, 0.1, 16.0);
-        ImGui::SliderFloat("Gain", &noiseCfg.Gain, 0.1, 16.0);
+        ImGui::SliderFloat("Gain", &noiseCfg.Gain, 0.1, 2.0);
 
         if (ImGui::Button("Noise"))
         {
@@ -101,7 +103,13 @@ int main()
                                 data.data());
         }
 
-        backend.DrawImageImGui(image);
+        ImGui::End();
+
+        ImGui::Begin("Noise");
+	ImVec2 availSize = ImGui::GetContentRegionAvail();
+        backend.DrawImageImGui(image, availSize.x, availSize.y);
+        ImGui::End();
+
         // backend.BindPipeline(pip);
         // backend.BindVertexBuffer(buf);
         // backend.Draw(6, 1);
