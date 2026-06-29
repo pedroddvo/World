@@ -58,21 +58,21 @@ int main()
     });
 
     float vertices[] = {
-        // Triangle 1
         // X,     Y,     U,     V
         -1.0f, -1.0f, 0.0f, 0.0f, // Top-Left
-        -1.0f, 1.0f, 0.0f, 1.0f,  // Bottom-Left
-        1.0f, 1.0f, 1.0f, 1.0f,   // Bottom-Right
-
-        // Triangle 2
-        -1.0f, -1.0f, 0.0f, 0.0f, // Top-Left
-        1.0f, 1.0f, 1.0f, 1.0f,   // Bottom-Right
-        1.0f, -1.0f, 1.0f, 0.0f   // Top-Right
+        1.0f,  -1.0f, 1.0f, 0.0f, // Top-Right
+        -1.0f, 1.0f,  0.0f, 1.0f, // Bottom-Left
+        1.0f,  1.0f,  1.0f, 1.0f, // Bottom-Right
     };
 
-    gfx::BufferObj buf = backend.CreateBuffer(
+    gfx::BufferObj vertexBuf = backend.CreateBuffer(
         vk::BufferUsageFlagBits::eVertexBuffer, sizeof(vertices));
-    backend.UploadBuffer(buf, sizeof(vertices), vertices);
+    backend.UploadBuffer(vertexBuf, sizeof(vertices), vertices);
+
+    uint16_t indices[] = {0, 2, 1, 1, 3, 2};
+    gfx::BufferObj indexBuf = backend.CreateBuffer(
+        vk::BufferUsageFlagBits::eIndexBuffer, sizeof(indices));
+    backend.UploadBuffer(indexBuf, sizeof(indices), indices);
 
     noise::PerlinConfig noiseCfg = {};
     std::vector<uint8_t> data = GenerateNoise(noiseCfg);
@@ -121,14 +121,15 @@ int main()
         backend.DrawImageImGui(image, availSize.x, availSize.y);
         ImGui::End();
 
-	g_FlyController.Update(&g_Camera, dt);
+        g_FlyController.Update(&g_Camera, dt);
         glm::mat4 mvp = g_Camera.ViewProjection(800.0f / 600.0f);
 
         backend.BindPipeline(pip);
         backend.BindPushConstant(pip, vk::ShaderStageFlagBits::eVertex, &mvp,
                                  sizeof(glm::mat4));
-        backend.BindVertexBuffer(buf);
-        backend.Draw(6, 1);
+        backend.BindVertexBuffer(vertexBuf);
+        backend.BindIndexBuffer(indexBuf, vk::IndexType::eUint16);
+        backend.DrawIndexed(6, 1);
         backend.FrameEnd(fi);
     }
 
@@ -141,14 +142,16 @@ static void KeyCallback(GLFWwindow* window, int key, int scancode, int action,
 {
     bool down = action == GLFW_PRESS;
 
-    switch (key)
-    { // clang-format off
-    case GLFW_KEY_W:		g_FlyController.Forward		= down; break;
-    case GLFW_KEY_S:		g_FlyController.Backward	= down; break;
-    case GLFW_KEY_D:		g_FlyController.Right		= down; break;
-    case GLFW_KEY_A:		g_FlyController.Left		= down; break;
-    case GLFW_KEY_SPACE:	g_FlyController.Up		= down; break;
-    case GLFW_KEY_LEFT_SHIFT:	g_FlyController.Down		= down; break;
-							     
-    } // clang-format on
+    if (down || action == GLFW_RELEASE)
+    {
+        switch (key)
+        { // clang-format off
+	case GLFW_KEY_W:		g_FlyController.Forward		= down; break;
+	case GLFW_KEY_S:		g_FlyController.Backward	= down; break;
+	case GLFW_KEY_D:		g_FlyController.Right		= down; break;
+	case GLFW_KEY_A:		g_FlyController.Left		= down; break;
+	case GLFW_KEY_SPACE:	        g_FlyController.Up		= down; break;
+	case GLFW_KEY_LEFT_SHIFT:	g_FlyController.Down		= down; break;
+	} // clang-format on
+    }
 }

@@ -65,11 +65,16 @@ class Backend
     void FrameEnd(uint32_t imageIndex);
 
     void BindVertexBuffer(BufferObj buf);
+    void BindIndexBuffer(BufferObj buf, vk::IndexType indexType);
     void BindPipeline(PipelineObj pip);
-    void BindPushConstant(PipelineObj pip, vk::ShaderStageFlags stageFlags, void* data, size_t size);
+    void BindPushConstant(PipelineObj pip, vk::ShaderStageFlags stageFlags,
+                          void* data, size_t size);
 
     void Draw(uint32_t vertexCount, uint32_t instanceCount,
               uint32_t firstVertex = 0, uint32_t firstInstance = 0);
+    void DrawIndexed(uint32_t indexCount, uint32_t instanceCount,
+                     uint32_t firstIndex = 0, int32_t vertexOffset = 0,
+                     uint32_t firstInstance = 0);
 
     void Resize(uint32_t width, uint32_t height);
     void Destroy(Object obj);

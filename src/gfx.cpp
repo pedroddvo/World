@@ -218,6 +218,12 @@ void Backend::BindPushConstant(PipelineObj pip, vk::ShaderStageFlags stageFlags,
                                                   stageFlags, 0, size, data);
 }
 
+void Backend::BindIndexBuffer(BufferObj buf, vk::IndexType indexType)
+{
+    m_FrameCommands[m_CurrentFrame].bindIndexBuffer(m_Buffers[buf.Id].Handle, 0,
+                                                    indexType);
+}
+
 void Backend::BindVertexBuffer(BufferObj buf)
 {
     m_FrameCommands[m_CurrentFrame].bindVertexBuffers(
@@ -236,6 +242,14 @@ void Backend::BindPipeline(PipelineObj pipObj)
             vk::PipelineBindPoint::eGraphics, pip.Layout, 0, {pip.Descriptor},
             {});
     }
+}
+
+void Backend::DrawIndexed(uint32_t indexCount, uint32_t instanceCount,
+                          uint32_t firstIndex, int32_t vertexOffset,
+                          uint32_t firstInstance)
+{
+    m_FrameCommands[m_CurrentFrame].drawIndexed(
+        indexCount, instanceCount, firstIndex, vertexOffset, firstInstance);
 }
 
 void Backend::Draw(uint32_t vertexCount, uint32_t instanceCount,
@@ -586,6 +600,7 @@ PipelineObj Backend::CreatePipeline(const CreatePipelineInfo& info)
 
     vk::PipelineRasterizationStateCreateInfo rasterizer = {};
     rasterizer.lineWidth = 1.0f;
+    rasterizer.frontFace = vk::FrontFace::eCounterClockwise;
 
     vk::PipelineMultisampleStateCreateInfo multisampling = {};
     multisampling.rasterizationSamples = vk::SampleCountFlagBits::e1;
