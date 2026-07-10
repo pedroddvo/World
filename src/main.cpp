@@ -18,7 +18,8 @@ struct GenerateNoiseResult
     std::vector<uint8_t> Data = {};
 };
 
-static GenerateNoiseResult GenerateNoise(const noise::PerlinConfig& noiseCfg)
+static GenerateNoiseResult GenerateNoise(noise::NoiseFunction noiseFn,
+                                         const noise::NoiseConfig& noiseCfg)
 {
     std::vector<glm::vec3> vertices = {};
     std::vector<uint32_t> indices = {};
@@ -28,14 +29,13 @@ static GenerateNoiseResult GenerateNoise(const noise::PerlinConfig& noiseCfg)
     {
         for (int x = 0; x < 800; x++)
         {
-            float v = noise::Perlin2D({x / 800.0f, y / 800.0f}, noiseCfg);
-            v = (v + 0.7071f) / 1.4142f;
+            float v = noise::Noise({x / 800.0f, y / 800.0f}, noiseCfg, noiseFn);
 
             uint8_t pixel =
                 static_cast<uint8_t>(glm::clamp(v * 255.0f, 0.0f, 255.0f));
             data.insert(data.end(), {pixel, pixel, pixel, 255});
 
-            vertices.push_back({x - 400, -v * 100.0f, y - 400});
+            vertices.push_back({x - 400, (1.0f - v) * 100.0f, y - 400});
         }
     }
 
@@ -88,8 +88,8 @@ int main()
             vk::ShaderStageFlagBits::eVertex, 0, sizeof(glm::mat4)}},
     });
 
-    noise::PerlinConfig noiseCfg = {};
-    GenerateNoiseResult gnr = GenerateNoise(noiseCfg);
+    noise::NoiseConfig noiseCfg = {};
+    GenerateNoiseResult gnr = GenerateNoise(noise::Perlin2D, noiseCfg);
 
     gfx::ImageObj image = backend.CreateImage(
         vk::Format::eR8G8B8A8Srgb, gnr.Data.size() * sizeof(uint8_t), 800, 800);
@@ -110,6 +110,10 @@ int main()
     gfx::SamplerObj samp = backend.CreateSampler(vk::Filter::eLinear);
     backend.UpdatePipelineImage(pip, 0, image, samp);
 
+    noise::NoiseFunction noiseFns[] = {noise::Perlin2D, noise::Voronoi2D};
+    auto noiseFnStrings = {"Perlin", "Voronoi"};
+    int currentNoiseFn = 0;
+
     float lastFrame = 0.0f;
     while (!glfwWindowShouldClose(window))
     {
@@ -123,7 +127,9 @@ int main()
 
         ImGui::Begin("Noise Parameters");
 
-        ImGui::Text("%f", dt);
+        ImGui::Combo("Noise Function", &currentNoiseFn, noiseFnStrings.begin(),
+                     noiseFnStrings.size());
+
         ImGui::SliderFloat("Frequency", &noiseCfg.Frequency, 0.1, 16.0);
         ImGui::SliderFloat("Amplitude", &noiseCfg.Amplitude, 0.1, 2.0);
 
@@ -135,7 +141,7 @@ int main()
 
         if (ImGui::Button("Noise"))
         {
-            gnr = GenerateNoise(noiseCfg);
+            gnr = GenerateNoise(noiseFns[currentNoiseFn], noiseCfg);
             backend.UploadImage(image, gnr.Data.size() * sizeof(uint8_t),
                                 gnr.Data.data());
             backend.UploadBuffer(indexBuf,

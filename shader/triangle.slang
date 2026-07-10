@@ -19,6 +19,6 @@ vs_output vertex_main(vs_input input, uniform float4x4 mvp) {
 
 [shader("fragment")]
 float4 fragment_main(vs_output input) {
-    return float4(1.0-abs(input.vpos.yyy)/100.0, 1.0);
+    return float4(input.vpos.yyy/100.0f, 1.0);
     // return tex.Sample(input.uv);
 }
