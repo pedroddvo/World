@@ -35,8 +35,7 @@ static GenerateNoiseResult GenerateNoise(const noise::PerlinConfig& noiseCfg)
                 static_cast<uint8_t>(glm::clamp(v * 255.0f, 0.0f, 255.0f));
             data.insert(data.end(), {pixel, pixel, pixel, 255});
 
-	    
-            vertices.push_back({x - 400, -v*100.0f, y - 400});
+            vertices.push_back({x - 400, -v * 100.0f, y - 400});
         }
     }
 
@@ -73,10 +72,12 @@ int main()
     glfwSetCursorPosCallback(window, MouseCallback);
     glfwSetInputMode(window, GLFW_CURSOR, GLFW_CURSOR_DISABLED);
 
+    bool depthTest = true;
     gfx::Backend backend = gfx::Backend(window);
     gfx::PipelineObj pip = backend.CreatePipeline({
         .VertexShader = "shader/triangle.vert.spv",
         .FragmentShader = "shader/triangle.frag.spv",
+        .DepthTest = depthTest,
 
         .Bindings = {{0, sizeof(float) * 3}},
         .Attributes = {{0, 0, vk::Format::eR32G32B32Sfloat}},
@@ -145,6 +146,27 @@ int main()
                                  gnr.Vertices.data());
         }
 
+        bool depthTestNew = depthTest;
+        ImGui::Checkbox("Depth Testing", &depthTestNew);
+        if (depthTestNew != depthTest)
+        {
+            depthTest = depthTestNew;
+            backend.Destroy(pip);
+            pip = backend.CreatePipeline({
+                .VertexShader = "shader/triangle.vert.spv",
+                .FragmentShader = "shader/triangle.frag.spv",
+                .DepthTest = depthTest,
+
+                .Bindings = {{0, sizeof(float) * 3}},
+                .Attributes = {{0, 0, vk::Format::eR32G32B32Sfloat}},
+                .Descriptors = {vk::DescriptorSetLayoutBinding{
+                    0, vk::DescriptorType::eCombinedImageSampler, 1,
+                    vk::ShaderStageFlagBits::eFragment}},
+                .PushConstants = {vk::PushConstantRange{
+                    vk::ShaderStageFlagBits::eVertex, 0, sizeof(glm::mat4)}},
+            });
+        }
+
         ImGui::End();
 
         ImGui::Begin("Noise");
@@ -203,7 +225,10 @@ static void KeyCallback(GLFWwindow* window, int key, int scancode, int action,
 glm::vec2 g_LastMouse = {400.0f, 300.0f};
 static void MouseCallback(GLFWwindow* window, double xpos, double ypos)
 {
-    glm::vec2 delta = {xpos - g_LastMouse.x, ypos - g_LastMouse.y};
+    if (glfwGetInputMode(window, GLFW_CURSOR) == GLFW_CURSOR_NORMAL)
+        return;
+
+    glm::vec2 delta = {xpos - g_LastMouse.x, g_LastMouse.y - ypos};
     g_LastMouse = {xpos, ypos};
     g_FlyController.MoveMouse(&g_Camera, delta);
 }

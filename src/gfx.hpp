@@ -42,6 +42,7 @@ struct CreatePipelineInfo
 {
     const char* VertexShader = nullptr;
     const char* FragmentShader = nullptr;
+    bool DepthTest = false;
 
     std::initializer_list<vk::VertexInputBindingDescription> Bindings = {};
     std::initializer_list<vk::VertexInputAttributeDescription> Attributes = {};
@@ -154,6 +155,10 @@ class Backend
         size_t Size = 0;
     };
     std::vector<Image> m_Images = {};
+
+    Image CreateDepthImage(uint32_t width, uint32_t height);
+    Image m_DepthImage = {};
+
     void DestroyImage(Image& img);
 
     struct Pipeline

@@ -20,7 +20,8 @@ class Camera
 
     glm::mat4 ViewProjection(float aspect) const
     {
-        glm::mat4 proj = glm::perspective(Fov, aspect, Znear, Zfar);
+        glm::mat4 proj =
+            glm::perspective(glm::radians(Fov), aspect, Znear, Zfar);
         glm::mat4 view = glm::lookAt(Position, Position + Front, Up);
         return proj * view;
     }
@@ -51,16 +52,16 @@ struct FlyController
     {
         float v = Speed * dt;
         cam->Position += cam->Front * (Forward ? v : Backward ? -v : 0.0f);
-        cam->Position += cam->Up * (Up ? -v : Down ? v : 0.0f);
+        cam->Position += cam->Up * (Up ? v : Down ? -v : 0.0f);
         cam->Position += cam->Right * (Right ? v : Left ? -v : 0.0f);
     }
 
     void MoveMouse(Camera* cam, glm::vec2 delta)
     {
-	delta *= Sensitivity;
-	cam->Yaw += delta.x;
-	cam->Pitch += delta.y;
-	cam->Pitch = glm::clamp(cam->Pitch, -89.0f, 89.0f);
-	cam->UpdateVectors();
+        delta *= Sensitivity;
+        cam->Yaw += delta.x;
+        cam->Pitch += delta.y;
+        cam->Pitch = glm::clamp(cam->Pitch, -89.0f, 89.0f);
+        cam->UpdateVectors();
     }
 };

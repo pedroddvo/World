@@ -33,6 +33,8 @@ FetchContent_Declare(imgui
     GIT_TAG master)
 FetchContent_MakeAvailable(glfw vk-bootstrap spdlog vma glm imgui)
 
+target_compile_definitions(glm PUBLIC GLM_FORCE_DEPTH_ZERO_TO_ONE)
+
 find_package(Vulkan REQUIRED)
 
 add_library(imgui STATIC

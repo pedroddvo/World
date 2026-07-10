@@ -164,6 +164,8 @@ Backend::Backend(GLFWwindow* window) : m_Window(window)
     m_DescriptorPool = m_Device.createDescriptorPool(
         vk::DescriptorPoolCreateInfo().setMaxSets(10).setPoolSizes(poolSizes));
 
+    m_DepthImage = CreateDepthImage(width, height);
+
     InitImgui();
 }
 
@@ -207,7 +209,8 @@ void Backend::InitImgui()
 
     imguiInfo.PipelineInfoMain.PipelineRenderingCreateInfo =
         (VkPipelineRenderingCreateInfo)vk::PipelineRenderingCreateInfo()
-            .setColorAttachmentFormats({m_SwcImageFormat});
+            .setColorAttachmentFormats({m_SwcImageFormat})
+            .setDepthAttachmentFormat(vk::Format::eD32Sfloat);
     ImGui_ImplVulkan_Init(&imguiInfo);
 }
 
@@ -282,12 +285,33 @@ uint32_t Backend::FrameBegin()
             .setSrcAccessMask({})
             .setDstAccessMask(vk::AccessFlagBits::eColorAttachmentWrite)
             .setOldLayout(vk::ImageLayout::eUndefined)
-            .setNewLayout(vk::ImageLayout::eAttachmentOptimal)
+            .setNewLayout(vk::ImageLayout::eColorAttachmentOptimal)
             .setSubresourceRange({vk::ImageAspectFlagBits::eColor, 0, 1, 0, 1});
     cmd.pipelineBarrier(vk::PipelineStageFlagBits::eColorAttachmentOutput,
                         vk::PipelineStageFlagBits::eColorAttachmentOutput, {},
                         {}, {}, {barrier});
 
+    barrier =
+        vk::ImageMemoryBarrier()
+            .setImage(m_DepthImage.Handle)
+            .setSrcAccessMask(vk::AccessFlagBits::eDepthStencilAttachmentWrite)
+            .setDstAccessMask(vk::AccessFlagBits::eDepthStencilAttachmentWrite)
+            .setOldLayout(vk::ImageLayout::eUndefined)
+            .setNewLayout(vk::ImageLayout::eDepthAttachmentOptimal)
+            .setSubresourceRange({vk::ImageAspectFlagBits::eDepth, 0, 1, 0, 1});
+    cmd.pipelineBarrier(vk::PipelineStageFlagBits::eEarlyFragmentTests |
+                            vk::PipelineStageFlagBits::eLateFragmentTests,
+                        vk::PipelineStageFlagBits::eEarlyFragmentTests |
+                            vk::PipelineStageFlagBits::eLateFragmentTests,
+                        {}, {}, {}, {barrier});
+
+    vk::RenderingAttachmentInfo depthAttachment =
+        vk::RenderingAttachmentInfo()
+            .setImageView(m_DepthImage.View)
+            .setImageLayout(vk::ImageLayout::eDepthAttachmentOptimal)
+            .setLoadOp(vk::AttachmentLoadOp::eClear)
+            .setStoreOp(vk::AttachmentStoreOp::eStore)
+            .setClearValue(vk::ClearDepthStencilValue(1.0f, 0));
     vk::RenderingAttachmentInfo colorAttachment =
         vk::RenderingAttachmentInfo()
             .setImageView(m_SwcViews[imageIndex])
@@ -298,11 +322,14 @@ uint32_t Backend::FrameBegin()
     cmd.beginRenderingKHR(vk::RenderingInfo()
                               .setRenderArea({{}, m_SwcExtent})
                               .setColorAttachments({colorAttachment})
+                              .setPDepthAttachment(&depthAttachment)
                               .setLayerCount(1));
 
     cmd.setScissor(0, {vk::Rect2D({}, m_SwcExtent)});
-    cmd.setViewport(
-        0, {vk::Viewport(0, 0, m_SwcExtent.width, m_SwcExtent.height)});
+    cmd.setViewport(0,
+                    {vk::Viewport(0.0f, m_SwcExtent.height, m_SwcExtent.width,
+                                  -(float)m_SwcExtent.height, 0.0f, 1.0f)});
+
     return imageIndex;
 }
 
@@ -635,11 +662,22 @@ PipelineObj Backend::CreatePipeline(const CreatePipelineInfo& info)
 
     vk::PipelineRenderingCreateInfo pipelineRenderingInfo = {};
     pipelineRenderingInfo.setColorAttachmentFormats({m_SwcImageFormat});
+    pipelineRenderingInfo.depthAttachmentFormat = vk::Format::eD32Sfloat;
 
     vk::PipelineDynamicStateCreateInfo dynamicState = {};
     auto states = {vk::DynamicState::eScissor, vk::DynamicState::eViewport};
     dynamicState.dynamicStateCount = states.size();
     dynamicState.pDynamicStates = states.begin();
+
+    vk::PipelineDepthStencilStateCreateInfo depthStencilState = {};
+    if (info.DepthTest)
+    {
+        depthStencilState.depthTestEnable = vk::True,
+        depthStencilState.depthWriteEnable = vk::True,
+        depthStencilState.depthCompareOp = vk::CompareOp::eLessOrEqual,
+        depthStencilState.depthBoundsTestEnable = vk::False,
+        depthStencilState.stencilTestEnable = vk::False;
+    }
 
     vk::GraphicsPipelineCreateInfo pipelineInfo = {};
     pipelineInfo.pNext = &pipelineRenderingInfo;
@@ -651,6 +689,7 @@ PipelineObj Backend::CreatePipeline(const CreatePipelineInfo& info)
     pipelineInfo.pMultisampleState = &multisampling;
     pipelineInfo.pColorBlendState = &colorBlending;
     pipelineInfo.pDynamicState = &dynamicState;
+    pipelineInfo.pDepthStencilState = &depthStencilState;
     pipelineInfo.layout = layout;
 
     vk::Pipeline pip =
@@ -778,6 +817,8 @@ Backend::~Backend()
     for (Sampler& buf : m_Samplers)
         DestroySampler(buf);
 
+    DestroyImage(m_DepthImage);
+
     ImGui_ImplVulkan_Shutdown();
     ImGui_ImplGlfw_Shutdown();
     ImGui::DestroyContext();
@@ -814,6 +855,37 @@ void Backend::PerformImmediateTransfer(
     EnsureVk(m_Device.waitForFences({m_TransferFence}, true, UINT64_MAX));
 
     m_Device.resetFences(m_TransferFence);
+}
+
+Backend::Image Backend::CreateDepthImage(uint32_t width, uint32_t height)
+{
+    vk::ImageCreateInfo imgInfo = {};
+    imgInfo.imageType = vk::ImageType::e2D;
+    imgInfo.format = vk::Format::eD32Sfloat;
+    imgInfo.extent = vk::Extent3D{width, height, 1};
+    imgInfo.mipLevels = 1;
+    imgInfo.arrayLayers = 1;
+    imgInfo.samples = vk::SampleCountFlagBits::e1;
+    imgInfo.tiling = vk::ImageTiling::eOptimal;
+    imgInfo.usage = vk::ImageUsageFlagBits::eDepthStencilAttachment;
+
+    VmaAllocationCreateInfo allocInfo = {};
+    allocInfo.usage = VMA_MEMORY_USAGE_AUTO;
+
+    Image img = {.Alive = true,
+                 .Extent = imgInfo.extent,
+                 .Size = width * height * sizeof(uint32_t)};
+    vmaCreateImage(m_Allocator, (VkImageCreateInfo*)&imgInfo, &allocInfo,
+                   &img.Handle, &img.Allocation, nullptr);
+
+    vk::ImageViewCreateInfo viewInfo = {};
+    viewInfo.image = img.Handle;
+    viewInfo.viewType = vk::ImageViewType::e2D;
+    viewInfo.format = imgInfo.format;
+    viewInfo.subresourceRange = {vk::ImageAspectFlagBits::eDepth, 0, 1, 0, 1};
+    img.View = m_Device.createImageView(viewInfo);
+
+    return img;
 }
 
 } // namespace gfx
