@@ -160,7 +160,9 @@ Backend::Backend(GLFWwindow* window) : m_Window(window)
             .setLevel(vk::CommandBufferLevel::ePrimary))[0];
 
     vk::DescriptorPoolSize poolSizes[] = {
-        {vk::DescriptorType::eCombinedImageSampler, 10}};
+        {vk::DescriptorType::eCombinedImageSampler, 10},
+        {vk::DescriptorType::eUniformBuffer, 10},
+    };
     m_DescriptorPool = m_Device.createDescriptorPool(
         vk::DescriptorPoolCreateInfo().setMaxSets(10).setPoolSizes(poolSizes));
 
@@ -437,8 +439,8 @@ ImageObj Backend::CreateImage(vk::Format format, size_t size, uint32_t width,
     allocInfo.usage = VMA_MEMORY_USAGE_AUTO;
 
     Image img = {.Alive = true, .Extent = imgInfo.extent, .Size = size};
-    vmaCreateImage(m_Allocator, (VkImageCreateInfo*)&imgInfo, &allocInfo,
-                   &img.Handle, &img.Allocation, nullptr);
+    EnsureVk(vmaCreateImage(m_Allocator, (VkImageCreateInfo*)&imgInfo,
+                            &allocInfo, &img.Handle, &img.Allocation, nullptr));
 
     vk::ImageViewCreateInfo viewInfo = {};
     viewInfo.image = img.Handle;
@@ -484,9 +486,9 @@ void Backend::UploadImage(ImageObj obj, size_t size, void* data)
     allocInfo.flags = VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT |
                       VMA_ALLOCATION_CREATE_MAPPED_BIT;
 
-    vmaCreateBuffer(m_Allocator, (VkBufferCreateInfo*)&createInfo, &allocInfo,
-                    &staging.Handle, &staging.Allocation,
-                    &staging.AllocationInfo);
+    EnsureVk(vmaCreateBuffer(m_Allocator, (VkBufferCreateInfo*)&createInfo,
+                             &allocInfo, &staging.Handle, &staging.Allocation,
+                             &staging.AllocationInfo));
 
     memcpy(staging.AllocationInfo.pMappedData, data, size);
     PerformImmediateTransfer(
@@ -536,8 +538,9 @@ BufferObj Backend::CreateBuffer(vk::BufferUsageFlags usage, size_t size)
     allocInfo.usage = VMA_MEMORY_USAGE_AUTO;
 
     Buffer buf = {.Alive = true, .Size = size};
-    vmaCreateBuffer(m_Allocator, (VkBufferCreateInfo*)&createInfo, &allocInfo,
-                    &buf.Handle, &buf.Allocation, &buf.AllocationInfo);
+    EnsureVk(vmaCreateBuffer(m_Allocator, (VkBufferCreateInfo*)&createInfo,
+                             &allocInfo, &buf.Handle, &buf.Allocation,
+                             &buf.AllocationInfo));
 
     m_Buffers.push_back(buf);
     return Object(m_Buffers.size() - 1, ObjectKind::Buffer);
@@ -560,9 +563,9 @@ void Backend::UploadBuffer(BufferObj obj, size_t size, void* data)
     allocInfo.flags = VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT |
                       VMA_ALLOCATION_CREATE_MAPPED_BIT;
 
-    vmaCreateBuffer(m_Allocator, (VkBufferCreateInfo*)&createInfo, &allocInfo,
-                    &staging.Handle, &staging.Allocation,
-                    &staging.AllocationInfo);
+    EnsureVk(vmaCreateBuffer(m_Allocator, (VkBufferCreateInfo*)&createInfo,
+                             &allocInfo, &staging.Handle, &staging.Allocation,
+                             &staging.AllocationInfo));
 
     memcpy(staging.AllocationInfo.pMappedData, data, size);
     PerformImmediateTransfer(
@@ -875,8 +878,8 @@ Backend::Image Backend::CreateDepthImage(uint32_t width, uint32_t height)
     Image img = {.Alive = true,
                  .Extent = imgInfo.extent,
                  .Size = width * height * sizeof(uint32_t)};
-    vmaCreateImage(m_Allocator, (VkImageCreateInfo*)&imgInfo, &allocInfo,
-                   &img.Handle, &img.Allocation, nullptr);
+    EnsureVk(vmaCreateImage(m_Allocator, (VkImageCreateInfo*)&imgInfo,
+                            &allocInfo, &img.Handle, &img.Allocation, nullptr));
 
     vk::ImageViewCreateInfo viewInfo = {};
     viewInfo.image = img.Handle;

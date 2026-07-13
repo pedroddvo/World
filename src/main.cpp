@@ -87,58 +87,69 @@ int main()
 
     bool depthTest = true;
     gfx::Backend backend = gfx::Backend(window);
-    gfx::PipelineObj pip = backend.CreatePipeline({
+
+    gfx::CreatePipelineInfo cpi = {
         .VertexShader = "shader/triangle.vert.spv",
         .FragmentShader = "shader/triangle.frag.spv",
         .DepthTest = depthTest,
 
         .Bindings = {{0, sizeof(float) * 3}},
         .Attributes = {{0, 0, vk::Format::eR32G32B32Sfloat}},
-        .Descriptors = {vk::DescriptorSetLayoutBinding{
-            0, vk::DescriptorType::eCombinedImageSampler, 1,
-            vk::ShaderStageFlagBits::eFragment}},
+        // .Descriptors = {vk::DescriptorSetLayoutBinding{
+        //     0, vk::DescriptorType::eUniformBuffer, 1,
+        //     vk::ShaderStageFlagBits::eFragment}},
         .PushConstants = {vk::PushConstantRange{
             vk::ShaderStageFlagBits::eVertex, 0, sizeof(glm::mat4)}},
-    });
+    };
+    gfx::PipelineObj pip = backend.CreatePipeline(cpi);
+
+    noise::NoiseFunction noiseFns[] = {noise::Perlin2D, noise::Voronoi2D};
+    auto noiseFnStrings = {"Perlin", "Voronoi"};
+    int currentNoiseFn = 0;
 
     noise::NoiseConfig noiseCfg = {};
-    GenerateNoiseResult gnr = GenerateNoise(noise::Perlin2D, noiseCfg);
+    GenerateNoiseResult gnr = GenerateNoise(noiseFns[currentNoiseFn], noiseCfg);
 
     gfx::ImageObj heightMap = backend.CreateImage(
         vk::Format::eR8G8B8A8Srgb, gnr.Data.size() * sizeof(uint8_t), 800, 800);
-    backend.UploadImage(heightMap, gnr.Data.size() * sizeof(uint8_t),
-                        gnr.Data.data());
 
     gfx::ImageObj normalMap =
         backend.CreateImage(vk::Format::eR8G8B8A8Srgb,
                             gnr.Normals.size() * sizeof(uint8_t), 800, 800);
-    std::vector<uint8_t> normalImg = {};
-    for (glm::vec3 n : gnr.Normals)
-    {
-        glm::vec<3, uint8_t> c =
-            glm::clamp((n + 1.0f) / 2.0f * 255.0f, 0.0f, 255.0f);
-        normalImg.insert(normalImg.end(), {c.x, c.y, c.z, 255});
-    }
-    backend.UploadImage(normalMap, normalImg.size() * sizeof(uint8_t),
-                        normalImg.data());
 
+    gfx::BufferObj normalMapBuffer =
+        backend.CreateBuffer(vk::BufferUsageFlagBits::eVertexBuffer,
+                             sizeof(glm::vec3) * gnr.Vertices.size());
     gfx::BufferObj vertexBuf =
         backend.CreateBuffer(vk::BufferUsageFlagBits::eVertexBuffer,
                              sizeof(glm::vec3) * gnr.Vertices.size());
     gfx::BufferObj indexBuf =
         backend.CreateBuffer(vk::BufferUsageFlagBits::eIndexBuffer,
                              sizeof(uint32_t) * gnr.Indices.size());
-    backend.UploadBuffer(indexBuf, sizeof(uint32_t) * gnr.Indices.size(),
-                         gnr.Indices.data());
-    backend.UploadBuffer(vertexBuf, sizeof(glm::vec3) * gnr.Vertices.size(),
-                         gnr.Vertices.data());
 
-    gfx::SamplerObj samp = backend.CreateSampler(vk::Filter::eLinear);
-    backend.UpdatePipelineImage(pip, 0, heightMap, samp);
-
-    noise::NoiseFunction noiseFns[] = {noise::Perlin2D, noise::Voronoi2D};
-    auto noiseFnStrings = {"Perlin", "Voronoi"};
-    int currentNoiseFn = 0;
+    auto CreateNoise = [&]()
+    {
+        gnr = GenerateNoise(noiseFns[currentNoiseFn], noiseCfg);
+        backend.UploadImage(heightMap, gnr.Data.size() * sizeof(uint8_t),
+                            gnr.Data.data());
+        backend.UploadBuffer(indexBuf, sizeof(uint32_t) * gnr.Indices.size(),
+                             gnr.Indices.data());
+        backend.UploadBuffer(vertexBuf, sizeof(glm::vec3) * gnr.Vertices.size(),
+                             gnr.Vertices.data());
+        std::vector<uint8_t> normalImg = {};
+        for (glm::vec3 n : gnr.Normals)
+        {
+            glm::vec<3, uint8_t> c =
+                glm::clamp((n + 1.0f) / 2.0f * 255.0f, 0.0f, 255.0f);
+            normalImg.insert(normalImg.end(), {c.x, c.y, c.z, 255});
+        }
+        backend.UploadImage(normalMap, normalImg.size() * sizeof(uint8_t),
+                            normalImg.data());
+        backend.UploadBuffer(normalMapBuffer,
+                             sizeof(glm::vec3) * gnr.Normals.size(),
+                             gnr.Normals.data());
+    };
+    CreateNoise();
 
     float lastFrame = 0.0f;
     while (!glfwWindowShouldClose(window))
@@ -166,26 +177,7 @@ int main()
         ImGui::SliderFloat("Gain", &noiseCfg.Gain, 0.1, 2.0);
 
         if (ImGui::Button("Noise"))
-        {
-            gnr = GenerateNoise(noiseFns[currentNoiseFn], noiseCfg);
-            backend.UploadImage(heightMap, gnr.Data.size() * sizeof(uint8_t),
-                                gnr.Data.data());
-            backend.UploadBuffer(indexBuf,
-                                 sizeof(uint32_t) * gnr.Indices.size(),
-                                 gnr.Indices.data());
-            backend.UploadBuffer(vertexBuf,
-                                 sizeof(glm::vec3) * gnr.Vertices.size(),
-                                 gnr.Vertices.data());
-            std::vector<uint8_t> normalImg = {};
-            for (glm::vec3 n : gnr.Normals)
-            {
-                glm::vec<3, uint8_t> c =
-                    glm::clamp((n + 1.0f) / 2.0f * 255.0f, 0.0f, 255.0f);
-                normalImg.insert(normalImg.end(), {c.x, c.y, c.z, 255});
-            }
-            backend.UploadImage(normalMap, normalImg.size() * sizeof(uint8_t),
-                                normalImg.data());
-        }
+            CreateNoise();
 
         bool depthTestNew = depthTest;
         ImGui::Checkbox("Depth Testing", &depthTestNew);
@@ -193,19 +185,7 @@ int main()
         {
             depthTest = depthTestNew;
             backend.Destroy(pip);
-            pip = backend.CreatePipeline({
-                .VertexShader = "shader/triangle.vert.spv",
-                .FragmentShader = "shader/triangle.frag.spv",
-                .DepthTest = depthTest,
-
-                .Bindings = {{0, sizeof(float) * 3}},
-                .Attributes = {{0, 0, vk::Format::eR32G32B32Sfloat}},
-                .Descriptors = {vk::DescriptorSetLayoutBinding{
-                    0, vk::DescriptorType::eCombinedImageSampler, 1,
-                    vk::ShaderStageFlagBits::eFragment}},
-                .PushConstants = {vk::PushConstantRange{
-                    vk::ShaderStageFlagBits::eVertex, 0, sizeof(glm::mat4)}},
-            });
+            pip = backend.CreatePipeline(cpi);
         }
 
         ImGui::End();
