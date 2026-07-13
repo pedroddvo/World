@@ -7,15 +7,23 @@
 #include <GLFW/glfw3.h>
 #include <stdio.h>
 #include <vulkan/vulkan_enums.hpp>
+#include <vulkan/vulkan_structs.hpp>
 
 static void KeyCallback(GLFWwindow* window, int key, int scancode, int action,
                         int mods);
 static void MouseCallback(GLFWwindow* window, double xpos, double ypos);
 
+struct Vertex
+{
+    glm::vec3 Position = {};
+    float Padding1 = 0.0f;
+    glm::vec3 Normal = {};
+    float Padding2 = 0.0f;
+};
+
 struct GenerateNoiseResult
 {
-    std::vector<glm::vec3> Vertices = {};
-    std::vector<glm::vec3> Normals = {};
+    std::vector<Vertex> Vertices = {};
     std::vector<uint32_t> Indices = {};
     std::vector<uint8_t> Data = {};
 };
@@ -23,7 +31,7 @@ struct GenerateNoiseResult
 static GenerateNoiseResult GenerateNoise(noise::NoiseFunction noiseFn,
                                          const noise::NoiseConfig& noiseCfg)
 {
-    std::vector<glm::vec3> vertices = {}, normals = {};
+    std::vector<Vertex> vertices = {};
     std::vector<uint32_t> indices = {};
     std::vector<uint8_t> data = {};
 
@@ -42,13 +50,14 @@ static GenerateNoiseResult GenerateNoise(noise::NoiseFunction noiseFn,
             float vl =
                 noise::Noise({(x - 1) / 800.0f, y / 800.0f}, noiseCfg, noiseFn);
 
-            normals.push_back(glm::normalize(glm::vec3{vl - vr, vd - vu, 1.0}));
-
             uint8_t pixel =
                 static_cast<uint8_t>(glm::clamp(v * 255.0f, 0.0f, 255.0f));
             data.insert(data.end(), {pixel, pixel, pixel, 255});
 
-            vertices.push_back({x - 400, (1.0f - v) * 100.0f, y - 400});
+            vertices.push_back(Vertex{
+                .Position = {x - 400, (1.0f - v) * 100.0f, y - 400},
+                .Normal = glm::normalize(glm::vec3{vl - vr, vd - vu, 1.0}),
+            });
         }
     }
 
@@ -68,7 +77,7 @@ static GenerateNoiseResult GenerateNoise(noise::NoiseFunction noiseFn,
         }
     }
 
-    return {vertices, normals, indices, data};
+    return {vertices, indices, data};
 }
 
 Camera g_Camera = {{0.0f, 0.0f, 2.0f}};
@@ -93,8 +102,11 @@ int main()
         .FragmentShader = "shader/triangle.frag.spv",
         .DepthTest = depthTest,
 
-        .Bindings = {{0, sizeof(float) * 3}},
-        .Attributes = {{0, 0, vk::Format::eR32G32B32Sfloat}},
+        .Bindings = {{0, sizeof(Vertex)}},
+        .Attributes = {vk::VertexInputAttributeDescription{
+                           0, 0, vk::Format::eR32G32B32A32Sfloat},
+                       vk::VertexInputAttributeDescription{
+                           1, 0, vk::Format::eR32G32B32A32Sfloat}},
         // .Descriptors = {vk::DescriptorSetLayoutBinding{
         //     0, vk::DescriptorType::eUniformBuffer, 1,
         //     vk::ShaderStageFlagBits::eFragment}},
@@ -115,14 +127,10 @@ int main()
 
     gfx::ImageObj normalMap =
         backend.CreateImage(vk::Format::eR8G8B8A8Srgb,
-                            gnr.Normals.size() * sizeof(uint8_t), 800, 800);
-
-    gfx::BufferObj normalMapBuffer =
-        backend.CreateBuffer(vk::BufferUsageFlagBits::eVertexBuffer,
-                             sizeof(glm::vec3) * gnr.Vertices.size());
+                            gnr.Vertices.size() * sizeof(uint8_t), 800, 800);
     gfx::BufferObj vertexBuf =
         backend.CreateBuffer(vk::BufferUsageFlagBits::eVertexBuffer,
-                             sizeof(glm::vec3) * gnr.Vertices.size());
+                             sizeof(Vertex) * gnr.Vertices.size());
     gfx::BufferObj indexBuf =
         backend.CreateBuffer(vk::BufferUsageFlagBits::eIndexBuffer,
                              sizeof(uint32_t) * gnr.Indices.size());
@@ -134,20 +142,18 @@ int main()
                             gnr.Data.data());
         backend.UploadBuffer(indexBuf, sizeof(uint32_t) * gnr.Indices.size(),
                              gnr.Indices.data());
-        backend.UploadBuffer(vertexBuf, sizeof(glm::vec3) * gnr.Vertices.size(),
+        backend.UploadBuffer(vertexBuf, sizeof(Vertex) * gnr.Vertices.size(),
                              gnr.Vertices.data());
         std::vector<uint8_t> normalImg = {};
-        for (glm::vec3 n : gnr.Normals)
+        for (Vertex v : gnr.Vertices)
         {
+            auto n = v.Normal;
             glm::vec<3, uint8_t> c =
                 glm::clamp((n + 1.0f) / 2.0f * 255.0f, 0.0f, 255.0f);
             normalImg.insert(normalImg.end(), {c.x, c.y, c.z, 255});
         }
         backend.UploadImage(normalMap, normalImg.size() * sizeof(uint8_t),
                             normalImg.data());
-        backend.UploadBuffer(normalMapBuffer,
-                             sizeof(glm::vec3) * gnr.Normals.size(),
-                             gnr.Normals.data());
     };
     CreateNoise();
 

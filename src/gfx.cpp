@@ -405,6 +405,31 @@ void Backend::UpdatePipelineImage(PipelineObj pipObj, uint32_t binding,
     m_Device.updateDescriptorSets({write}, {});
 }
 
+void Backend::UpdatePipelineBuffer(PipelineObj pipObj, uint32_t binding,
+                                   BufferObj bufObj,
+                                   vk::DescriptorType descriptorType)
+{
+    Ensure(pipObj.Kind == ObjectKind::Pipeline);
+    Ensure(bufObj.Kind == ObjectKind::Buffer);
+
+    Pipeline& pip = m_Pipelines[pipObj.Id];
+    Ensure(pip.Alive);
+
+    vk::WriteDescriptorSet write = {};
+    write.dstBinding = binding;
+    write.dstSet = pip.Descriptor;
+    write.descriptorType = descriptorType;
+
+    Buffer& buf = m_Buffers[bufObj.Id];
+    Ensure(buf.Alive);
+
+    vk::DescriptorBufferInfo bufferInfo =
+        vk::DescriptorBufferInfo().setBuffer(buf.Handle).setRange(vk::WholeSize);
+    write.setBufferInfo(bufferInfo);
+
+    m_Device.updateDescriptorSets({write}, {});
+}
+
 SamplerObj Backend::CreateSampler(vk::Filter filter)
 {
     vk::SamplerCreateInfo samplerInfo = {};

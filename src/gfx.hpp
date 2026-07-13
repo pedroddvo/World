@@ -93,6 +93,9 @@ class Backend
     PipelineObj CreatePipeline(const CreatePipelineInfo& info);
     void UpdatePipelineImage(PipelineObj pip, uint32_t binding, ImageObj img,
                              SamplerObj samp);
+    void UpdatePipelineBuffer(
+        PipelineObj pip, uint32_t binding, BufferObj buf,
+        vk::DescriptorType descriptorType = vk::DescriptorType::eUniformBuffer);
 
   private:
     void DestroySwapchain();
