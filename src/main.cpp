@@ -28,8 +28,9 @@ struct GenerateNoiseResult
     std::vector<uint8_t> Data = {};
 };
 
-static GenerateNoiseResult GenerateNoise(noise::NoiseFunction noiseFn,
-                                         const noise::NoiseConfig& noiseCfg)
+static GenerateNoiseResult
+GenerateNoise(noise::NoiseFunction noiseFn, const noise::NoiseConfig& noiseCfg,
+              const noise::ErosionParameters& erosionParameters)
 {
     std::vector<Vertex> vertices = {};
     std::vector<uint32_t> indices = {};
@@ -39,6 +40,7 @@ static GenerateNoiseResult GenerateNoise(noise::NoiseFunction noiseFn,
     {
         for (int x = 0; x < 800; x++)
         {
+            glm::vec2 uv = {x / 800.0f, y / 800.0f};
             float v = noise::Noise({x / 800.0f, y / 800.0f}, noiseCfg, noiseFn);
 
             float vu =
@@ -49,14 +51,19 @@ static GenerateNoiseResult GenerateNoise(noise::NoiseFunction noiseFn,
                 noise::Noise({(x + 1) / 800.0f, y / 800.0f}, noiseCfg, noiseFn);
             float vl =
                 noise::Noise({(x - 1) / 800.0f, y / 800.0f}, noiseCfg, noiseFn);
+            glm::vec2 n = normalize(glm::vec2(vd - vu, vl - vr));
+
+            glm::vec4 h = noise::ErosionFilter(uv, glm::vec3(v, n), 1.0f,
+                                               erosionParameters);
 
             uint8_t pixel =
                 static_cast<uint8_t>(glm::clamp(v * 255.0f, 0.0f, 255.0f));
             data.insert(data.end(), {pixel, pixel, pixel, 255});
 
+            v = v + h.x;
             vertices.push_back(Vertex{
                 .Position = {x - 400, (1.0f - v) * 100.0f, y - 400},
-                .Normal = glm::normalize(glm::vec3{vl - vr, vd - vu, 1.0}),
+                .Normal = glm::normalize(glm::vec3(n, 1.0f)),
             });
         }
     }
@@ -119,8 +126,10 @@ int main()
     auto noiseFnStrings = {"Perlin", "Voronoi"};
     int currentNoiseFn = 0;
 
+    noise::ErosionParameters erosionParams = {};
     noise::NoiseConfig noiseCfg = {};
-    GenerateNoiseResult gnr = GenerateNoise(noiseFns[currentNoiseFn], noiseCfg);
+    GenerateNoiseResult gnr =
+        GenerateNoise(noiseFns[currentNoiseFn], noiseCfg, erosionParams);
 
     gfx::ImageObj heightMap = backend.CreateImage(
         vk::Format::eR8G8B8A8Srgb, gnr.Data.size() * sizeof(uint8_t), 800, 800);
@@ -137,7 +146,7 @@ int main()
 
     auto CreateNoise = [&]()
     {
-        gnr = GenerateNoise(noiseFns[currentNoiseFn], noiseCfg);
+        gnr = GenerateNoise(noiseFns[currentNoiseFn], noiseCfg, erosionParams);
         backend.UploadImage(heightMap, gnr.Data.size() * sizeof(uint8_t),
                             gnr.Data.data());
         backend.UploadBuffer(indexBuf, sizeof(uint32_t) * gnr.Indices.size(),
@@ -193,6 +202,44 @@ int main()
             backend.Destroy(pip);
             pip = backend.CreatePipeline(cpi);
         }
+
+        ImGui::SliderFloat("Strength", &erosionParams.Strength, 0.0f, 1.0f);
+        ImGui::SliderFloat("Gully Weight", &erosionParams.GullyWeight, 0.0f,
+                           1.0f);
+        ImGui::SliderFloat("Detail", &erosionParams.Detail, 0.0f, 1.0f);
+
+        ImGui::Separator();
+
+        // Vector sliders (Each component ranges from 0.0 to 1.0)
+        // Note: glm::vec value pointers can be accessed using &vector.x or
+        // glm::value_ptr
+        ImGui::SliderFloat4("Rounding (RGBA/XYZW)", &erosionParams.Rounding.x,
+                            0.0f, 1.0f);
+        ImGui::SliderFloat4("Onset (RGBA/XYZW)", &erosionParams.Onset.x, 0.0f,
+                            1.0f);
+        ImGui::SliderFloat2("Assumed Slope (XY)", &erosionParams.AssumedSlope.x,
+                            0.0f, 1.0f);
+
+        ImGui::Separator();
+
+        // Noise and scale generation parameters
+        ImGui::SliderFloat("Scale", &erosionParams.Scale, 0.0f, 1.0f);
+
+        // Octaves is an integer slider (1 to 8 is typical, but you can adjust
+        // limits)
+        ImGui::SliderInt("Erosion Octaves", &erosionParams.Octaves, 1, 8);
+
+        ImGui::SliderFloat("Lacunarity", &erosionParams.Lacunarity, 0.0f, 1.0f);
+        ImGui::SliderFloat("Gain", &erosionParams.Gain, 0.0f, 1.0f);
+        ImGui::SliderFloat("Cell Scale", &erosionParams.CellScale, 0.0f, 1.0f);
+
+        ImGui::Separator();
+
+        // Utility / Debug parameters
+        ImGui::SliderFloat("Normalization", &erosionParams.Normalization, 0.0f,
+                           1.0f);
+        ImGui::SliderFloat("Ridge Map", &erosionParams.RidgeMap, 0.0f, 1.0f);
+        ImGui::SliderFloat("Debug", &erosionParams.Debug, 0.0f, 1.0f);
 
         ImGui::End();
 

@@ -423,8 +423,9 @@ void Backend::UpdatePipelineBuffer(PipelineObj pipObj, uint32_t binding,
     Buffer& buf = m_Buffers[bufObj.Id];
     Ensure(buf.Alive);
 
-    vk::DescriptorBufferInfo bufferInfo =
-        vk::DescriptorBufferInfo().setBuffer(buf.Handle).setRange(vk::WholeSize);
+    vk::DescriptorBufferInfo bufferInfo = vk::DescriptorBufferInfo()
+                                              .setBuffer(buf.Handle)
+                                              .setRange(vk::WholeSize);
     write.setBufferInfo(bufferInfo);
 
     m_Device.updateDescriptorSets({write}, {});
