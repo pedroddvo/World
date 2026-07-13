@@ -202,46 +202,41 @@ int main()
             backend.Destroy(pip);
             pip = backend.CreatePipeline(cpi);
         }
+        ImGui::End();
 
+        ImGui::Begin("Erosion Filter");
         ImGui::SliderFloat("Strength", &erosionParams.Strength, 0.0f, 1.0f);
         ImGui::SliderFloat("Gully Weight", &erosionParams.GullyWeight, 0.0f,
                            1.0f);
-        ImGui::SliderFloat("Detail", &erosionParams.Detail, 0.0f, 1.0f);
+        ImGui::SliderFloat("Detail", &erosionParams.Detail, 0.0f, 4.0f);
 
         ImGui::Separator();
 
-        // Vector sliders (Each component ranges from 0.0 to 1.0)
-        // Note: glm::vec value pointers can be accessed using &vector.x or
-        // glm::value_ptr
         ImGui::SliderFloat4("Rounding (RGBA/XYZW)", &erosionParams.Rounding.x,
-                            0.0f, 1.0f);
+                            0.0f, 2.0f);
         ImGui::SliderFloat4("Onset (RGBA/XYZW)", &erosionParams.Onset.x, 0.0f,
-                            1.0f);
+                            4.0f);
         ImGui::SliderFloat2("Assumed Slope (XY)", &erosionParams.AssumedSlope.x,
                             0.0f, 1.0f);
 
         ImGui::Separator();
 
-        // Noise and scale generation parameters
         ImGui::SliderFloat("Scale", &erosionParams.Scale, 0.0f, 1.0f);
 
-        // Octaves is an integer slider (1 to 8 is typical, but you can adjust
-        // limits)
-        ImGui::SliderInt("Erosion Octaves", &erosionParams.Octaves, 1, 8);
+        ImGui::SliderInt("Octaves", &erosionParams.Octaves, 1, 8);
 
-        ImGui::SliderFloat("Lacunarity", &erosionParams.Lacunarity, 0.0f, 1.0f);
-        ImGui::SliderFloat("Gain", &erosionParams.Gain, 0.0f, 1.0f);
+        ImGui::SliderFloat("Lacunarity", &erosionParams.Lacunarity, 0.0f, 4.0f);
+        ImGui::SliderFloat("Gain", &erosionParams.Gain, 0.0f, 2.0f);
         ImGui::SliderFloat("Cell Scale", &erosionParams.CellScale, 0.0f, 1.0f);
 
         ImGui::Separator();
 
-        // Utility / Debug parameters
         ImGui::SliderFloat("Normalization", &erosionParams.Normalization, 0.0f,
                            1.0f);
         ImGui::SliderFloat("Ridge Map", &erosionParams.RidgeMap, 0.0f, 1.0f);
         ImGui::SliderFloat("Debug", &erosionParams.Debug, 0.0f, 1.0f);
-
         ImGui::End();
+
 
         ImGui::Begin("Noise");
         ImVec2 availSize = ImGui::GetContentRegionAvail();
