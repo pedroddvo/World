@@ -102,6 +102,7 @@ class Backend
     void InitImgui();
 
     GLFWwindow* m_Window = nullptr;
+    bool m_PendingResize = false;
 
     vk::Instance m_Instance = {};
     vk::PhysicalDevice m_Gpu = {};

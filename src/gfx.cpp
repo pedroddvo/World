@@ -122,6 +122,13 @@ Backend::Backend(GLFWwindow* window) : m_Window(window)
     m_PrsIndex = EnsureVk(vkbDevice.get_queue_index(vkb::QueueType::present));
     VULKAN_HPP_DEFAULT_DISPATCHER.init(m_Device);
 
+    VmaAllocatorCreateInfo vmaCreateInfo = {};
+    vmaCreateInfo.vulkanApiVersion = VK_API_VERSION_1_2;
+    vmaCreateInfo.physicalDevice = m_Gpu;
+    vmaCreateInfo.device = m_Device;
+    vmaCreateInfo.instance = m_Instance;
+    EnsureVk(vmaCreateAllocator(&vmaCreateInfo, &m_Allocator));
+
     int width = 0, height = 0;
     glfwGetFramebufferSize(window, &width, &height);
     Resize(width, height);
@@ -143,13 +150,6 @@ Backend::Backend(GLFWwindow* window) : m_Window(window)
                 .setLevel(vk::CommandBufferLevel::ePrimary))[0];
     }
 
-    VmaAllocatorCreateInfo vmaCreateInfo = {};
-    vmaCreateInfo.vulkanApiVersion = VK_API_VERSION_1_2;
-    vmaCreateInfo.physicalDevice = m_Gpu;
-    vmaCreateInfo.device = m_Device;
-    vmaCreateInfo.instance = m_Instance;
-    EnsureVk(vmaCreateAllocator(&vmaCreateInfo, &m_Allocator));
-
     m_TransferFence = m_Device.createFence({});
     m_TransferPool = m_Device.createCommandPool(
         vk::CommandPoolCreateInfo().setQueueFamilyIndex(m_XfrIndex));
@@ -165,8 +165,6 @@ Backend::Backend(GLFWwindow* window) : m_Window(window)
     };
     m_DescriptorPool = m_Device.createDescriptorPool(
         vk::DescriptorPoolCreateInfo().setMaxSets(10).setPoolSizes(poolSizes));
-
-    m_DepthImage = CreateDepthImage(width, height);
 
     InitImgui();
 }
@@ -270,12 +268,25 @@ uint32_t Backend::FrameBegin()
                                     UINT64_MAX));
     m_Device.resetFences({m_WaitFences[m_CurrentFrame]});
 
+    if (m_PendingResize)
+    {
+        int width = 0, height = 0;
+        glfwGetFramebufferSize(m_Window, &width, &height);
+        Resize(width, height);
+    }
+
     ImGui_ImplVulkan_NewFrame();
     ImGui_ImplGlfw_NewFrame();
     ImGui::NewFrame();
 
-    uint32_t imageIndex = EnsureVk(m_Device.acquireNextImageKHR(
-        m_Swapchain, UINT64_MAX, m_PresentCompleteSemas[m_CurrentFrame]));
+    vk::ResultValue<uint32_t> imageIndexResult = m_Device.acquireNextImageKHR(
+        m_Swapchain, UINT64_MAX, m_PresentCompleteSemas[m_CurrentFrame]);
+    if (imageIndexResult.result == vk::Result::eSuboptimalKHR)
+        m_PendingResize = true;
+    else
+        EnsureVk(imageIndexResult.result);
+
+    uint32_t imageIndex = imageIndexResult.value;
 
     vk::CommandBuffer cmd = m_FrameCommands[m_CurrentFrame];
     cmd.reset();
@@ -367,11 +378,15 @@ void Backend::FrameEnd(uint32_t imageIndex)
             .setSignalSemaphores({m_RenderCompleteSemas[imageIndex]});
     m_GfxQueue.submit({submit}, m_WaitFences[m_CurrentFrame]);
 
-    EnsureVk(m_PrsQueue.presentKHR(
+    vk::Result presentResult = m_PrsQueue.presentKHR(
         vk::PresentInfoKHR()
             .setWaitSemaphores({m_RenderCompleteSemas[imageIndex]})
             .setSwapchains(m_Swapchain)
-            .setImageIndices({imageIndex})));
+            .setImageIndices({imageIndex}));
+    if (presentResult == vk::Result::eSuboptimalKHR)
+        m_PendingResize = true;
+    else
+        EnsureVk(presentResult);
 
     m_CurrentFrame = (m_CurrentFrame + 1) % FramesInFlight;
 }
@@ -750,6 +765,7 @@ void Backend::DestroySwapchain()
 
 void Backend::Resize(uint32_t width, uint32_t height)
 {
+    m_Device.waitIdle();
     m_SwcExtent = vk::Extent2D{width, height};
 
     vkb::Swapchain swc =
@@ -768,6 +784,12 @@ void Backend::Resize(uint32_t width, uint32_t height)
     m_RenderCompleteSemas.resize(m_SwcImages.size());
     for (vk::Semaphore& sema : m_RenderCompleteSemas)
         sema = m_Device.createSemaphore({});
+
+    if (m_DepthImage.Handle != nullptr)
+        DestroyImage(m_DepthImage);
+    m_DepthImage = CreateDepthImage(width, height);
+
+    m_PendingResize = false;
 }
 
 void Backend::Destroy(Object obj)
