@@ -1,6 +1,7 @@
 #include "camera.hpp"
 #include "gfx.hpp"
 #include "gfx/noise.hpp"
+#include "glm/fwd.hpp"
 #include "imgui.h"
 #include "util.hpp"
 #include <GLFW/glfw3.h>
@@ -14,6 +15,7 @@ static void MouseCallback(GLFWwindow* window, double xpos, double ypos);
 struct GenerateNoiseResult
 {
     std::vector<glm::vec3> Vertices = {};
+    std::vector<glm::vec3> Normals = {};
     std::vector<uint32_t> Indices = {};
     std::vector<uint8_t> Data = {};
 };
@@ -21,7 +23,7 @@ struct GenerateNoiseResult
 static GenerateNoiseResult GenerateNoise(noise::NoiseFunction noiseFn,
                                          const noise::NoiseConfig& noiseCfg)
 {
-    std::vector<glm::vec3> vertices = {};
+    std::vector<glm::vec3> vertices = {}, normals = {};
     std::vector<uint32_t> indices = {};
     std::vector<uint8_t> data = {};
 
@@ -30,6 +32,17 @@ static GenerateNoiseResult GenerateNoise(noise::NoiseFunction noiseFn,
         for (int x = 0; x < 800; x++)
         {
             float v = noise::Noise({x / 800.0f, y / 800.0f}, noiseCfg, noiseFn);
+
+            float vu =
+                noise::Noise({x / 800.0f, (y + 1) / 800.0f}, noiseCfg, noiseFn);
+            float vd =
+                noise::Noise({x / 800.0f, (y - 1) / 800.0f}, noiseCfg, noiseFn);
+            float vr =
+                noise::Noise({(x + 1) / 800.0f, y / 800.0f}, noiseCfg, noiseFn);
+            float vl =
+                noise::Noise({(x - 1) / 800.0f, y / 800.0f}, noiseCfg, noiseFn);
+
+            normals.push_back(glm::normalize(glm::vec3{vl - vr, vd - vu, 1.0}));
 
             uint8_t pixel =
                 static_cast<uint8_t>(glm::clamp(v * 255.0f, 0.0f, 255.0f));
@@ -55,7 +68,7 @@ static GenerateNoiseResult GenerateNoise(noise::NoiseFunction noiseFn,
         }
     }
 
-    return {vertices, indices, data};
+    return {vertices, normals, indices, data};
 }
 
 Camera g_Camera = {{0.0f, 0.0f, 2.0f}};
@@ -91,10 +104,23 @@ int main()
     noise::NoiseConfig noiseCfg = {};
     GenerateNoiseResult gnr = GenerateNoise(noise::Perlin2D, noiseCfg);
 
-    gfx::ImageObj image = backend.CreateImage(
+    gfx::ImageObj heightMap = backend.CreateImage(
         vk::Format::eR8G8B8A8Srgb, gnr.Data.size() * sizeof(uint8_t), 800, 800);
-    backend.UploadImage(image, gnr.Data.size() * sizeof(uint8_t),
+    backend.UploadImage(heightMap, gnr.Data.size() * sizeof(uint8_t),
                         gnr.Data.data());
+
+    gfx::ImageObj normalMap =
+        backend.CreateImage(vk::Format::eR8G8B8A8Srgb,
+                            gnr.Normals.size() * sizeof(uint8_t), 800, 800);
+    std::vector<uint8_t> normalImg = {};
+    for (glm::vec3 n : gnr.Normals)
+    {
+        glm::vec<3, uint8_t> c =
+            glm::clamp((n + 1.0f) / 2.0f * 255.0f, 0.0f, 255.0f);
+        normalImg.insert(normalImg.end(), {c.x, c.y, c.z, 255});
+    }
+    backend.UploadImage(normalMap, normalImg.size() * sizeof(uint8_t),
+                        normalImg.data());
 
     gfx::BufferObj vertexBuf =
         backend.CreateBuffer(vk::BufferUsageFlagBits::eVertexBuffer,
@@ -108,7 +134,7 @@ int main()
                          gnr.Vertices.data());
 
     gfx::SamplerObj samp = backend.CreateSampler(vk::Filter::eLinear);
-    backend.UpdatePipelineImage(pip, 0, image, samp);
+    backend.UpdatePipelineImage(pip, 0, heightMap, samp);
 
     noise::NoiseFunction noiseFns[] = {noise::Perlin2D, noise::Voronoi2D};
     auto noiseFnStrings = {"Perlin", "Voronoi"};
@@ -142,7 +168,7 @@ int main()
         if (ImGui::Button("Noise"))
         {
             gnr = GenerateNoise(noiseFns[currentNoiseFn], noiseCfg);
-            backend.UploadImage(image, gnr.Data.size() * sizeof(uint8_t),
+            backend.UploadImage(heightMap, gnr.Data.size() * sizeof(uint8_t),
                                 gnr.Data.data());
             backend.UploadBuffer(indexBuf,
                                  sizeof(uint32_t) * gnr.Indices.size(),
@@ -150,6 +176,15 @@ int main()
             backend.UploadBuffer(vertexBuf,
                                  sizeof(glm::vec3) * gnr.Vertices.size(),
                                  gnr.Vertices.data());
+            std::vector<uint8_t> normalImg = {};
+            for (glm::vec3 n : gnr.Normals)
+            {
+                glm::vec<3, uint8_t> c =
+                    glm::clamp((n + 1.0f) / 2.0f * 255.0f, 0.0f, 255.0f);
+                normalImg.insert(normalImg.end(), {c.x, c.y, c.z, 255});
+            }
+            backend.UploadImage(normalMap, normalImg.size() * sizeof(uint8_t),
+                                normalImg.data());
         }
 
         bool depthTestNew = depthTest;
@@ -177,7 +212,8 @@ int main()
 
         ImGui::Begin("Noise");
         ImVec2 availSize = ImGui::GetContentRegionAvail();
-        backend.DrawImageImGui(image, availSize.x, availSize.y);
+        backend.DrawImageImGui(heightMap, availSize.x, availSize.y);
+        backend.DrawImageImGui(normalMap, availSize.x, availSize.y);
         ImGui::End();
 
         g_FlyController.Update(&g_Camera, dt);
