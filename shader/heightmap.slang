@@ -1,6 +1,12 @@
+enum NoiseType
+{
+    Perlin = 0,
+    Voronoi,
+};
+
 struct NoiseConfig {
-    uint Seed = 0;
-    uint Octaves = 1;
+    NoiseType Type;
+    uint Seed = 0, Octaves = 1;
 
     float Lacunarity = 2.0f, Gain = 0.5f;
     float Amplitude = 0.5f, Frequency = 1.0f;
@@ -67,6 +73,35 @@ struct Perlin2D : INoiseFunction
     }
 }
 
+struct Voronoi2D : INoiseFunction
+{
+    static float evaluate(float2 v, const NoiseConfig cfg)
+    {
+        float2 f = floor(v);
+
+        float minDist = 2.0f;
+
+        [unroll]
+        for (int x = -1; x <= 1; x++)
+        {
+            [unroll]
+            for (int y = -1; y <= 1; y++)
+            {
+                float2 n = float2((float)x, (float)y);
+
+                int2 cellCoord = (int2)(f + n);
+                float dist = length(GetGradientZO(cellCoord, cfg.Seed) + n - fract(v));
+                if (dist < minDist)
+                {
+                    minDist = dist;
+                }
+            }
+        }
+
+        return minDist;    
+    }
+}
+
 float Noise<F : INoiseFunction>(float2 v, const NoiseConfig cfg)
 {
     float y = 0.0f;
@@ -98,7 +133,13 @@ void compute_main(uint3 id : SV_DispatchThreadID, uniform NoiseConfig cfg)
 {
     uint2 globalID = id.xy;
     float2 uv = float2(globalID) / float2(800.0, 800.0);
-    float height = Noise<Perlin2D>(uv, cfg);
+    float height = 0.0f;
+
+    switch (cfg.Type)
+    {
+    case NoiseType::Perlin: height = Noise<Perlin2D>(uv, cfg); break;
+    case NoiseType::Voronoi: height = Noise<Voronoi2D>(uv, cfg); break;
+    }
 
     uint index = globalID.y * 800 + globalID.x;
     Vertices[index].Position = 

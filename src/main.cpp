@@ -13,6 +13,22 @@ static void KeyCallback(GLFWwindow* window, int key, int scancode, int action,
                         int mods);
 static void MouseCallback(GLFWwindow* window, double xpos, double ypos);
 
+enum NoiseType : int
+{
+    NOISE_PERLIN = 0,
+    NOISE_VORONOI,
+};
+
+struct NoiseConfig
+{
+    NoiseType Type = NOISE_PERLIN;
+    uint32_t Seed = 0;
+    uint32_t Octaves = 1;
+
+    float Lacunarity = 2.0f, Gain = 0.5f;
+    float Amplitude = 0.5f, Frequency = 1.0f;
+};
+
 struct Vertex
 {
     glm::vec3 Position = {};
@@ -128,32 +144,31 @@ int main()
             0, vk::DescriptorType::eStorageBuffer, 1,
             vk::ShaderStageFlagBits::eCompute}},
         .PushConstants = {{vk::ShaderStageFlagBits::eCompute, 0,
-                           sizeof(noise::NoiseConfig)}},
+                           sizeof(NoiseConfig)}},
     };
     gfx::PipelineObj computePip = backend.CreateComputePipeline(computePipInfo);
 
-    noise::NoiseFunction noiseFns[] = {noise::Perlin2D, noise::Voronoi2D};
     auto noiseFnStrings = {"Perlin", "Voronoi"};
-    int currentNoiseFn = 0;
 
     noise::ErosionParameters erosionParams = {};
-    noise::NoiseConfig noiseCfg = {};
-    GenerateNoiseResult gnr =
-        GenerateNoise(noiseFns[currentNoiseFn], noiseCfg, erosionParams);
+    NoiseConfig noiseCfg = {};
+    // GenerateNoiseResult gnr =
+    //     GenerateNoise(noiseFns[currentNoiseFn], noiseCfg, erosionParams);
 
-    gfx::ImageObj heightMap = backend.CreateImage(
-        vk::Format::eR8G8B8A8Srgb, gnr.Data.size() * sizeof(uint8_t), 800, 800);
-
-    gfx::ImageObj normalMap =
-        backend.CreateImage(vk::Format::eR8G8B8A8Srgb,
-                            gnr.Vertices.size() * sizeof(uint8_t), 800, 800);
+    // gfx::ImageObj heightMap = backend.CreateImage(
+    //     vk::Format::eR8G8B8A8Srgb, gnr.Data.size() * sizeof(uint8_t), 800,
+    //     800);
+    //
+    // gfx::ImageObj normalMap =
+    //     backend.CreateImage(vk::Format::eR8G8B8A8Srgb,
+    //                         gnr.Vertices.size() * sizeof(uint8_t), 800, 800);
     gfx::BufferObj vertexBuf =
         backend.CreateBuffer(vk::BufferUsageFlagBits::eVertexBuffer |
                                  vk::BufferUsageFlagBits::eStorageBuffer,
-                             sizeof(Vertex) * gnr.Vertices.size());
-    gfx::BufferObj indexBuf =
-        backend.CreateBuffer(vk::BufferUsageFlagBits::eIndexBuffer,
-                             sizeof(uint32_t) * gnr.Indices.size());
+                             sizeof(Vertex) * 800 * 800);
+    uint32_t indicesCount = 799 * 799 * 6;
+    gfx::BufferObj indexBuf = backend.CreateBuffer(
+        vk::BufferUsageFlagBits::eIndexBuffer, sizeof(uint32_t) * indicesCount);
     backend.UpdatePipelineBuffer(computePip, 0, vertexBuf,
                                  vk::DescriptorType::eStorageBuffer);
 
@@ -176,32 +191,34 @@ int main()
     backend.UploadBuffer(indexBuf, sizeof(uint32_t) * indices.size(),
                          indices.data());
 
-    auto CreateNoise = [&]()
-    {
-        gnr = GenerateNoise(noiseFns[currentNoiseFn], noiseCfg, erosionParams);
-        backend.UploadImage(heightMap, gnr.Data.size() * sizeof(uint8_t),
-                            gnr.Data.data());
-        backend.UploadBuffer(indexBuf, sizeof(uint32_t) * gnr.Indices.size(),
-                             gnr.Indices.data());
-        // backend.UploadBuffer(vertexBuf, sizeof(Vertex) * gnr.Vertices.size(),
-        //                      gnr.Vertices.data());
-        std::vector<uint8_t> normalImg = {};
-        for (Vertex v : gnr.Vertices)
-        {
-            auto n = v.Normal;
-            glm::vec<3, uint8_t> c =
-                glm::clamp((n + 1.0f) / 2.0f * 255.0f, 0.0f, 255.0f);
-            normalImg.insert(normalImg.end(), {c.x, c.y, c.z, 255});
-        }
-        backend.UploadImage(normalMap, normalImg.size() * sizeof(uint8_t),
-                            normalImg.data());
-    };
+    // auto CreateNoise = [&]()
+    // {
+    //     gnr = GenerateNoise(noiseFns[currentNoiseFn], noiseCfg,
+    //     erosionParams); backend.UploadImage(heightMap, gnr.Data.size() *
+    //     sizeof(uint8_t),
+    //                         gnr.Data.data());
+    //     backend.UploadBuffer(indexBuf, sizeof(uint32_t) * gnr.Indices.size(),
+    //                          gnr.Indices.data());
+    //     // backend.UploadBuffer(vertexBuf, sizeof(Vertex) *
+    //     gnr.Vertices.size(),
+    //     //                      gnr.Vertices.data());
+    //     std::vector<uint8_t> normalImg = {};
+    //     for (Vertex v : gnr.Vertices)
+    //     {
+    //         auto n = v.Normal;
+    //         glm::vec<3, uint8_t> c =
+    //             glm::clamp((n + 1.0f) / 2.0f * 255.0f, 0.0f, 255.0f);
+    //         normalImg.insert(normalImg.end(), {c.x, c.y, c.z, 255});
+    //     }
+    //     backend.UploadImage(normalMap, normalImg.size() * sizeof(uint8_t),
+    //                         normalImg.data());
+    // };
     // CreateNoise();
 
     uint32_t cfi = backend.FrameBegin();
     backend.BindPipeline(computePip);
     backend.BindPushConstant(computePip, vk::ShaderStageFlagBits::eCompute,
-                             &noiseCfg, sizeof(noise::NoiseConfig));
+                             &noiseCfg, sizeof(NoiseConfig));
     backend.Dispatch(800.0f / 16.0f, 800.0f / 16.0f, 1.0f);
     backend.FrameEnd(cfi);
 
@@ -223,16 +240,17 @@ int main()
             backend.BindPipeline(computePip);
             backend.BindPushConstant(computePip,
                                      vk::ShaderStageFlagBits::eCompute,
-                                     &noiseCfg, sizeof(noise::NoiseConfig));
+                                     &noiseCfg, sizeof(NoiseConfig));
             backend.Dispatch(800.0f / 16.0f, 800.0f / 16.0f, 1.0f);
             backend.FrameEndCompute(fi);
+            updateNoise = false;
         }
 
         backend.FrameBeginRender(fi);
         ImGui::Begin("Noise Parameters");
 
         updateNoise |=
-            ImGui::Combo("Noise Function", &currentNoiseFn,
+            ImGui::Combo("Noise Function", (int*)&noiseCfg.Type,
                          noiseFnStrings.begin(), noiseFnStrings.size());
 
         updateNoise |=
@@ -304,7 +322,7 @@ int main()
                                  &mvp, sizeof(glm::mat4));
         backend.BindVertexBuffer(vertexBuf);
         backend.BindIndexBuffer(indexBuf, vk::IndexType::eUint32);
-        backend.DrawIndexed(gnr.Indices.size(), 1);
+        backend.DrawIndexed(indicesCount, 1);
         backend.FrameEndRender(fi);
 
         backend.FrameEnd(fi);
