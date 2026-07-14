@@ -1,4 +1,5 @@
 #include "util.hpp"
+#include <vector>
 #include <vulkan/vulkan_core.h>
 #define VULKAN_HPP_DISPATCH_LOADER_DYNAMIC 1
 
@@ -162,6 +163,7 @@ Backend::Backend(GLFWwindow* window) : m_Window(window)
     vk::DescriptorPoolSize poolSizes[] = {
         {vk::DescriptorType::eCombinedImageSampler, 10},
         {vk::DescriptorType::eUniformBuffer, 10},
+        {vk::DescriptorType::eStorageBuffer, 10},
     };
     m_DescriptorPool = m_Device.createDescriptorPool(
         vk::DescriptorPoolCreateInfo().setMaxSets(10).setPoolSizes(poolSizes));
@@ -236,14 +238,24 @@ void Backend::BindVertexBuffer(BufferObj buf)
 void Backend::BindPipeline(PipelineObj pipObj)
 {
     auto pip = m_Pipelines[pipObj.Id];
-    m_FrameCommands[m_CurrentFrame].bindPipeline(
-        vk::PipelineBindPoint::eGraphics, pip.Handle);
+
+    vk::PipelineBindPoint bindPoint = {};
+    switch (pip.Kind)
+    {
+    case PipelineKind::Compute:
+        bindPoint = vk::PipelineBindPoint::eCompute;
+        break;
+    case PipelineKind::Graphics:
+        bindPoint = vk::PipelineBindPoint::eGraphics;
+        break;
+    }
+
+    m_FrameCommands[m_CurrentFrame].bindPipeline(bindPoint, pip.Handle);
 
     if (pip.Descriptor != nullptr)
     {
         m_FrameCommands[m_CurrentFrame].bindDescriptorSets(
-            vk::PipelineBindPoint::eGraphics, pip.Layout, 0, {pip.Descriptor},
-            {});
+            bindPoint, pip.Layout, 0, {pip.Descriptor}, {});
     }
 }
 
@@ -262,6 +274,13 @@ void Backend::Draw(uint32_t vertexCount, uint32_t instanceCount,
                                          firstVertex, firstInstance);
 }
 
+void Backend::Dispatch(uint32_t groupCountX, uint32_t groupCountY,
+                       uint32_t groupCountZ)
+{
+    m_FrameCommands[m_CurrentFrame].dispatch(groupCountX, groupCountY,
+                                             groupCountZ);
+}
+
 uint32_t Backend::FrameBegin()
 {
     EnsureVk(m_Device.waitForFences({m_WaitFences[m_CurrentFrame]}, true,
@@ -274,10 +293,6 @@ uint32_t Backend::FrameBegin()
         glfwGetFramebufferSize(m_Window, &width, &height);
         Resize(width, height);
     }
-
-    ImGui_ImplVulkan_NewFrame();
-    ImGui_ImplGlfw_NewFrame();
-    ImGui::NewFrame();
 
     vk::ResultValue<uint32_t> imageIndexResult = m_Device.acquireNextImageKHR(
         m_Swapchain, UINT64_MAX, m_PresentCompleteSemas[m_CurrentFrame]);
@@ -318,6 +333,17 @@ uint32_t Backend::FrameBegin()
                             vk::PipelineStageFlagBits::eLateFragmentTests,
                         {}, {}, {}, {barrier});
 
+    return imageIndex;
+}
+
+void Backend::FrameBeginRender(uint32_t imageIndex)
+{
+    vk::CommandBuffer cmd = m_FrameCommands[m_CurrentFrame];
+
+    ImGui_ImplVulkan_NewFrame();
+    ImGui_ImplGlfw_NewFrame();
+    ImGui::NewFrame();
+
     vk::RenderingAttachmentInfo depthAttachment =
         vk::RenderingAttachmentInfo()
             .setImageView(m_DepthImage.View)
@@ -332,6 +358,7 @@ uint32_t Backend::FrameBegin()
             .setLoadOp(vk::AttachmentLoadOp::eClear)
             .setStoreOp(vk::AttachmentStoreOp::eStore)
             .setClearValue({{0.0f, 0.0f, 0.0f, 0.0f}});
+
     cmd.beginRenderingKHR(vk::RenderingInfo()
                               .setRenderArea({{}, m_SwcExtent})
                               .setColorAttachments({colorAttachment})
@@ -342,17 +369,45 @@ uint32_t Backend::FrameBegin()
     cmd.setViewport(0,
                     {vk::Viewport(0.0f, m_SwcExtent.height, m_SwcExtent.width,
                                   -(float)m_SwcExtent.height, 0.0f, 1.0f)});
-
-    return imageIndex;
 }
 
-void Backend::FrameEnd(uint32_t imageIndex)
+void Backend::FrameBeginCompute(uint32_t imageIndex)
+{
+    vk::CommandBuffer cmd = m_FrameCommands[m_CurrentFrame];
+}
+
+void Backend::FrameEndCompute(uint32_t imageIndex)
+{
+    vk::CommandBuffer cmd = m_FrameCommands[m_CurrentFrame];
+
+    std::vector<vk::BufferMemoryBarrier> barriers = {};
+    for (BufferObj buf : m_BuffersUsedInCompute)
+    {
+        barriers.push_back(
+            vk::BufferMemoryBarrier()
+                .setBuffer(m_Buffers[buf.Id].Handle)
+                .setSize(vk::WholeSize)
+                .setSrcAccessMask(vk::AccessFlagBits::eShaderWrite)
+                .setDstAccessMask(vk::AccessFlagBits::eVertexAttributeRead));
+    }
+
+    m_FrameCommands[m_CurrentFrame].pipelineBarrier(
+        vk::PipelineStageFlagBits::eComputeShader,
+        vk::PipelineStageFlagBits::eVertexInput, {}, {}, barriers, {});
+}
+
+void Backend::FrameEndRender(uint32_t imageIndex)
 {
     vk::CommandBuffer cmd = m_FrameCommands[m_CurrentFrame];
 
     ImGui::Render();
     ImGui_ImplVulkan_RenderDrawData(ImGui::GetDrawData(), cmd);
     cmd.endRenderingKHR();
+}
+
+void Backend::FrameEnd(uint32_t imageIndex)
+{
+    vk::CommandBuffer cmd = m_FrameCommands[m_CurrentFrame];
 
     vk::ImageMemoryBarrier barrier =
         vk::ImageMemoryBarrier()
@@ -442,6 +497,11 @@ void Backend::UpdatePipelineBuffer(PipelineObj pipObj, uint32_t binding,
                                               .setBuffer(buf.Handle)
                                               .setRange(vk::WholeSize);
     write.setBufferInfo(bufferInfo);
+
+    if (pip.Kind == PipelineKind::Compute)
+    {
+        m_BuffersUsedInCompute.push_back(bufObj);
+    }
 
     m_Device.updateDescriptorSets({write}, {});
 }
@@ -573,7 +633,9 @@ BufferObj Backend::CreateBuffer(vk::BufferUsageFlags usage, size_t size)
 {
     vk::BufferCreateInfo createInfo = {};
     createInfo.size = size;
-    createInfo.usage = usage | vk::BufferUsageFlagBits::eTransferDst;
+    createInfo.usage = usage & vk::BufferUsageFlagBits::eStorageBuffer
+                           ? usage
+                           : usage | vk::BufferUsageFlagBits::eTransferDst;
 
     VmaAllocationCreateInfo allocInfo = {};
     allocInfo.usage = VMA_MEMORY_USAGE_AUTO;
@@ -641,7 +703,57 @@ static vk::ShaderModule CreateShaderModule(vk::Device device,
     return module;
 }
 
-PipelineObj Backend::CreatePipeline(const CreatePipelineInfo& info)
+PipelineObj
+Backend::CreateComputePipeline(const CreateComputePipelineInfo& info)
+{
+    Ensure(info.ComputeShader != nullptr);
+
+    vk::ShaderModule mod = CreateShaderModule(m_Device, info.ComputeShader);
+    vk::PipelineShaderStageCreateInfo stage = vk::PipelineShaderStageCreateInfo(
+        {}, vk::ShaderStageFlagBits::eCompute, mod, "main");
+
+    vk::PipelineLayoutCreateInfo pipelineLayoutInfo = {};
+    pipelineLayoutInfo.setPushConstantRanges(info.PushConstants);
+
+    vk::DescriptorSetLayout descriptorLayout = nullptr;
+    vk::DescriptorSet descriptor = nullptr;
+    if (info.Descriptors.size() > 0)
+    {
+        descriptorLayout = m_Device.createDescriptorSetLayout(
+            vk::DescriptorSetLayoutCreateInfo().setBindings(info.Descriptors));
+
+        descriptor = m_Device.allocateDescriptorSets(
+            vk::DescriptorSetAllocateInfo()
+                .setDescriptorPool(m_DescriptorPool)
+                .setSetLayouts({descriptorLayout}))[0];
+        pipelineLayoutInfo.setSetLayouts({descriptorLayout});
+    }
+
+    vk::PipelineLayout layout =
+        m_Device.createPipelineLayout(pipelineLayoutInfo);
+
+    vk::ComputePipelineCreateInfo pipelineInfo = {};
+    pipelineInfo.layout = layout;
+    pipelineInfo.stage = stage;
+
+    vk::Pipeline pip =
+        EnsureVk(m_Device.createComputePipeline(nullptr, pipelineInfo));
+
+    m_Device.destroyShaderModule(mod);
+
+    m_Pipelines.push_back({
+        .Alive = true,
+        .Handle = pip,
+        .Layout = layout,
+        .Descriptor = descriptor,
+        .DescriptorLayout = descriptorLayout,
+        .Kind = PipelineKind::Compute,
+    });
+    return Object(m_Pipelines.size() - 1, ObjectKind::Pipeline);
+}
+
+PipelineObj
+Backend::CreateGraphicsPipeline(const CreateGraphicsPipelineInfo& info)
 {
     std::vector<vk::PipelineShaderStageCreateInfo> shaderStages = {};
 
@@ -748,6 +860,7 @@ PipelineObj Backend::CreatePipeline(const CreatePipelineInfo& info)
         .Layout = layout,
         .Descriptor = descriptor,
         .DescriptorLayout = descriptorLayout,
+        .Kind = PipelineKind::Graphics,
     });
     return Object(m_Pipelines.size() - 1, ObjectKind::Pipeline);
 }

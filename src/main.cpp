@@ -53,14 +53,14 @@ GenerateNoise(noise::NoiseFunction noiseFn, const noise::NoiseConfig& noiseCfg,
                 noise::Noise({(x - 1) / 800.0f, y / 800.0f}, noiseCfg, noiseFn);
             glm::vec2 n = normalize(glm::vec2(vd - vu, vl - vr));
 
-            glm::vec4 h = noise::ErosionFilter(uv, glm::vec3(v, n), 1.0f,
-                                               erosionParameters);
+            // glm::vec4 h = noise::ErosionFilter(uv, glm::vec3(v, n), 1.0f,
+            //                                    erosionParameters);
+            // v = v + h.x;
 
             uint8_t pixel =
                 static_cast<uint8_t>(glm::clamp(v * 255.0f, 0.0f, 255.0f));
             data.insert(data.end(), {pixel, pixel, pixel, 255});
 
-            v = v + h.x;
             vertices.push_back(Vertex{
                 .Position = {x - 400, (1.0f - v) * 100.0f, y - 400},
                 .Normal = glm::normalize(glm::vec3(n, 1.0f)),
@@ -104,7 +104,7 @@ int main()
     bool depthTest = true;
     gfx::Backend backend = gfx::Backend(window);
 
-    gfx::CreatePipelineInfo cpi = {
+    gfx::CreateGraphicsPipelineInfo drawPipInfo = {
         .VertexShader = "shader/triangle.vert.spv",
         .FragmentShader = "shader/triangle.frag.spv",
         .DepthTest = depthTest,
@@ -120,7 +120,17 @@ int main()
         .PushConstants = {vk::PushConstantRange{
             vk::ShaderStageFlagBits::eVertex, 0, sizeof(glm::mat4)}},
     };
-    gfx::PipelineObj pip = backend.CreatePipeline(cpi);
+    gfx::PipelineObj drawPip = backend.CreateGraphicsPipeline(drawPipInfo);
+
+    gfx::CreateComputePipelineInfo computePipInfo = {
+        .ComputeShader = "shader/heightmap.comp.spv",
+        .Descriptors = {vk::DescriptorSetLayoutBinding{
+            0, vk::DescriptorType::eStorageBuffer, 1,
+            vk::ShaderStageFlagBits::eCompute}},
+        .PushConstants = {{vk::ShaderStageFlagBits::eCompute, 0,
+                           sizeof(noise::NoiseConfig)}},
+    };
+    gfx::PipelineObj computePip = backend.CreateComputePipeline(computePipInfo);
 
     noise::NoiseFunction noiseFns[] = {noise::Perlin2D, noise::Voronoi2D};
     auto noiseFnStrings = {"Perlin", "Voronoi"};
@@ -138,11 +148,33 @@ int main()
         backend.CreateImage(vk::Format::eR8G8B8A8Srgb,
                             gnr.Vertices.size() * sizeof(uint8_t), 800, 800);
     gfx::BufferObj vertexBuf =
-        backend.CreateBuffer(vk::BufferUsageFlagBits::eVertexBuffer,
+        backend.CreateBuffer(vk::BufferUsageFlagBits::eVertexBuffer |
+                                 vk::BufferUsageFlagBits::eStorageBuffer,
                              sizeof(Vertex) * gnr.Vertices.size());
     gfx::BufferObj indexBuf =
         backend.CreateBuffer(vk::BufferUsageFlagBits::eIndexBuffer,
                              sizeof(uint32_t) * gnr.Indices.size());
+    backend.UpdatePipelineBuffer(computePip, 0, vertexBuf,
+                                 vk::DescriptorType::eStorageBuffer);
+
+    std::vector<uint32_t> indices = {};
+    for (int y = 0; y < 799; y++)
+    {
+        for (int x = 0; x < 799; x++)
+        {
+            uint32_t i = y * 800 + x;
+
+            indices.push_back(i);
+            indices.push_back(i + 800);
+            indices.push_back(i + 1);
+
+            indices.push_back(i + 1);
+            indices.push_back(i + 800);
+            indices.push_back(i + 801);
+        }
+    }
+    backend.UploadBuffer(indexBuf, sizeof(uint32_t) * indices.size(),
+                         indices.data());
 
     auto CreateNoise = [&]()
     {
@@ -151,8 +183,8 @@ int main()
                             gnr.Data.data());
         backend.UploadBuffer(indexBuf, sizeof(uint32_t) * gnr.Indices.size(),
                              gnr.Indices.data());
-        backend.UploadBuffer(vertexBuf, sizeof(Vertex) * gnr.Vertices.size(),
-                             gnr.Vertices.data());
+        // backend.UploadBuffer(vertexBuf, sizeof(Vertex) * gnr.Vertices.size(),
+        //                      gnr.Vertices.data());
         std::vector<uint8_t> normalImg = {};
         for (Vertex v : gnr.Vertices)
         {
@@ -164,8 +196,16 @@ int main()
         backend.UploadImage(normalMap, normalImg.size() * sizeof(uint8_t),
                             normalImg.data());
     };
-    CreateNoise();
+    // CreateNoise();
 
+    uint32_t cfi = backend.FrameBegin();
+    backend.BindPipeline(computePip);
+    backend.BindPushConstant(computePip, vk::ShaderStageFlagBits::eCompute,
+                             &noiseCfg, sizeof(noise::NoiseConfig));
+    backend.Dispatch(800.0f / 16.0f, 800.0f / 16.0f, 1.0f);
+    backend.FrameEnd(cfi);
+
+    bool updateNoise = false;
     float lastFrame = 0.0f;
     while (!glfwWindowShouldClose(window))
     {
@@ -177,30 +217,43 @@ int main()
 
         uint32_t fi = backend.FrameBegin();
 
+        if (updateNoise)
+        {
+            backend.FrameBeginCompute(fi);
+            backend.BindPipeline(computePip);
+            backend.BindPushConstant(computePip,
+                                     vk::ShaderStageFlagBits::eCompute,
+                                     &noiseCfg, sizeof(noise::NoiseConfig));
+            backend.Dispatch(800.0f / 16.0f, 800.0f / 16.0f, 1.0f);
+            backend.FrameEndCompute(fi);
+        }
+
+        backend.FrameBeginRender(fi);
         ImGui::Begin("Noise Parameters");
 
-        ImGui::Combo("Noise Function", &currentNoiseFn, noiseFnStrings.begin(),
-                     noiseFnStrings.size());
+        updateNoise |=
+            ImGui::Combo("Noise Function", &currentNoiseFn,
+                         noiseFnStrings.begin(), noiseFnStrings.size());
 
-        ImGui::SliderFloat("Frequency", &noiseCfg.Frequency, 0.1, 16.0);
-        ImGui::SliderFloat("Amplitude", &noiseCfg.Amplitude, 0.1, 2.0);
+        updateNoise |=
+            ImGui::SliderFloat("Frequency", &noiseCfg.Frequency, 0.1, 16.0);
+        updateNoise |=
+            ImGui::SliderFloat("Amplitude", &noiseCfg.Amplitude, 0.1, 2.0);
 
         uint32_t octMin = 1, octMax = 4;
-        ImGui::SliderScalar("Octaves", ImGuiDataType_U32, &noiseCfg.Octaves,
-                            &octMin, &octMax);
-        ImGui::SliderFloat("Lacunarity", &noiseCfg.Lacunarity, 0.1, 16.0);
-        ImGui::SliderFloat("Gain", &noiseCfg.Gain, 0.1, 2.0);
-
-        if (ImGui::Button("Noise"))
-            CreateNoise();
+        updateNoise |= ImGui::SliderScalar("Octaves", ImGuiDataType_U32,
+                                           &noiseCfg.Octaves, &octMin, &octMax);
+        updateNoise |=
+            ImGui::SliderFloat("Lacunarity", &noiseCfg.Lacunarity, 0.1, 16.0);
+        updateNoise |= ImGui::SliderFloat("Gain", &noiseCfg.Gain, 0.1, 2.0);
 
         bool depthTestNew = depthTest;
         ImGui::Checkbox("Depth Testing", &depthTestNew);
         if (depthTestNew != depthTest)
         {
             depthTest = depthTestNew;
-            backend.Destroy(pip);
-            pip = backend.CreatePipeline(cpi);
+            backend.Destroy(drawPip);
+            drawPip = backend.CreateGraphicsPipeline(drawPipInfo);
         }
         ImGui::End();
 
@@ -237,22 +290,23 @@ int main()
         ImGui::SliderFloat("Debug", &erosionParams.Debug, 0.0f, 1.0f);
         ImGui::End();
 
-
         ImGui::Begin("Noise");
         ImVec2 availSize = ImGui::GetContentRegionAvail();
-        backend.DrawImageImGui(heightMap, availSize.x, availSize.y);
-        backend.DrawImageImGui(normalMap, availSize.x, availSize.y);
+        // backend.DrawImageImGui(heightMap, availSize.x, availSize.y);
+        // backend.DrawImageImGui(normalMap, availSize.x, availSize.y);
         ImGui::End();
 
         g_FlyController.Update(&g_Camera, dt);
         glm::mat4 mvp = g_Camera.ViewProjection(800.0f / 600.0f);
 
-        backend.BindPipeline(pip);
-        backend.BindPushConstant(pip, vk::ShaderStageFlagBits::eVertex, &mvp,
-                                 sizeof(glm::mat4));
+        backend.BindPipeline(drawPip);
+        backend.BindPushConstant(drawPip, vk::ShaderStageFlagBits::eVertex,
+                                 &mvp, sizeof(glm::mat4));
         backend.BindVertexBuffer(vertexBuf);
         backend.BindIndexBuffer(indexBuf, vk::IndexType::eUint32);
         backend.DrawIndexed(gnr.Indices.size(), 1);
+        backend.FrameEndRender(fi);
+
         backend.FrameEnd(fi);
     }
 

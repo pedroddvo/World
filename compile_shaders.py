@@ -8,12 +8,14 @@ for filename in glob.iglob("shader/*.slang"):
         content = f.read()
         if '[shader("vertex")]' in content: stages.append("vertex")
         if '[shader("fragment")]' in content: stages.append("fragment")
+        if '[shader("compute")]' in content: stages.append("compute")
     
     for stage in stages:
         ext = ""
         match stage:
             case "vertex": ext = ".vert"
             case "fragment": ext = ".frag"
+            case "compute": ext = ".comp"
             case _: assert(False)
 
         out_file = Path(filename).with_suffix(f'{ext}.spv')

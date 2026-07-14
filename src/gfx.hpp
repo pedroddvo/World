@@ -38,7 +38,7 @@ using PipelineObj = Object;
 using ImageObj = Object;
 using SamplerObj = Object;
 
-struct CreatePipelineInfo
+struct CreateGraphicsPipelineInfo
 {
     const char* VertexShader = nullptr;
     const char* FragmentShader = nullptr;
@@ -46,6 +46,14 @@ struct CreatePipelineInfo
 
     std::initializer_list<vk::VertexInputBindingDescription> Bindings = {};
     std::initializer_list<vk::VertexInputAttributeDescription> Attributes = {};
+
+    std::initializer_list<vk::DescriptorSetLayoutBinding> Descriptors = {};
+    std::initializer_list<vk::PushConstantRange> PushConstants = {};
+};
+
+struct CreateComputePipelineInfo
+{
+    const char* ComputeShader = nullptr;
 
     std::initializer_list<vk::DescriptorSetLayoutBinding> Descriptors = {};
     std::initializer_list<vk::PushConstantRange> PushConstants = {};
@@ -63,6 +71,10 @@ class Backend
     ~Backend();
 
     uint32_t FrameBegin();
+    void FrameBeginCompute(uint32_t imageIndex);
+    void FrameEndCompute(uint32_t imageIndex);
+    void FrameBeginRender(uint32_t imageIndex);
+    void FrameEndRender(uint32_t imageIndex);
     void FrameEnd(uint32_t imageIndex);
 
     void BindVertexBuffer(BufferObj buf);
@@ -76,6 +88,8 @@ class Backend
     void DrawIndexed(uint32_t indexCount, uint32_t instanceCount,
                      uint32_t firstIndex = 0, int32_t vertexOffset = 0,
                      uint32_t firstInstance = 0);
+    void Dispatch(uint32_t groupCountX, uint32_t groupCountY,
+                  uint32_t groupCountZ);
 
     void Resize(uint32_t width, uint32_t height);
     void Destroy(Object obj);
@@ -90,12 +104,13 @@ class Backend
 
     SamplerObj CreateSampler(vk::Filter filter);
 
-    PipelineObj CreatePipeline(const CreatePipelineInfo& info);
+    PipelineObj CreateComputePipeline(const CreateComputePipelineInfo& info);
+    PipelineObj CreateGraphicsPipeline(const CreateGraphicsPipelineInfo& info);
     void UpdatePipelineImage(PipelineObj pip, uint32_t binding, ImageObj img,
                              SamplerObj samp);
     void UpdatePipelineBuffer(
         PipelineObj pip, uint32_t binding, BufferObj buf,
-        vk::DescriptorType descriptorType = vk::DescriptorType::eUniformBuffer);
+        vk::DescriptorType descriptorType);
 
   private:
     void DestroySwapchain();
@@ -146,6 +161,7 @@ class Backend
         size_t Size = 0;
     };
     std::vector<Buffer> m_Buffers = {};
+    std::vector<BufferObj> m_BuffersUsedInCompute = {};
     void DestroyBuffer(Buffer& buf);
 
     struct Image
@@ -165,6 +181,11 @@ class Backend
 
     void DestroyImage(Image& img);
 
+    enum class PipelineKind
+    {
+        Compute,
+        Graphics
+    };
     struct Pipeline
     {
         bool Alive = false;
@@ -172,6 +193,8 @@ class Backend
         VkPipelineLayout Layout = {};
         VkDescriptorSet Descriptor = {};
         VkDescriptorSetLayout DescriptorLayout = {};
+
+        PipelineKind Kind = {};
     };
     std::vector<Pipeline> m_Pipelines = {};
     void DestroyPipeline(Pipeline& pip);
