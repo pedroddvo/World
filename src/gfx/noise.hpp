@@ -13,12 +13,13 @@ struct NoiseConfig
     float Amplitude = 0.5f, Frequency = 1.0f;
 };
 
-struct ErosionParameters
+struct alignas(16) ErosionParameters
 {
     float Strength = 0.22f, GullyWeight = 0.5f, Detail = 1.5f;
-    glm::vec4 Rounding = glm::vec4(0.1f, 0.0f, 0.1f, 2.0f);
-    glm::vec4 Onset = glm::vec4(1.25f, 1.25f, 2.8f, 1.5f);
-    glm::vec2 AssumedSlope = glm::vec2(0.7f, 1.0f);
+    float Pad0;
+    alignas(16) glm::vec4 Rounding = glm::vec4(0.1f, 0.0f, 0.1f, 2.0f);
+    alignas(16) glm::vec4 Onset = glm::vec4(1.25f, 1.25f, 2.8f, 1.5f);
+    alignas(8) glm::vec2 AssumedSlope = glm::vec2(0.7f, 1.0f);
     float Scale = 0.15f;
     int Octaves = 4;
     float Lacunarity = 2.0f, Gain = 0.5f, CellScale = 0.7f;

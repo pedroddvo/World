@@ -13,20 +13,19 @@ static void KeyCallback(GLFWwindow* window, int key, int scancode, int action,
                         int mods);
 static void MouseCallback(GLFWwindow* window, double xpos, double ypos);
 
-enum NoiseType : int
+enum class NoiseType : uint32_t
 {
-    NOISE_PERLIN = 0,
-    NOISE_VORONOI,
+    Perlin = 0,
+    Voronoi,
 };
 
-struct NoiseConfig
+struct alignas(16) ComputeConfig
 {
-    NoiseType Type = NOISE_PERLIN;
-    uint32_t Seed = 0;
-    uint32_t Octaves = 1;
+    NoiseType Type = NoiseType::Perlin;
+    noise::NoiseConfig noiseCfg;
 
-    float Lacunarity = 2.0f, Gain = 0.5f;
-    float Amplitude = 0.5f, Frequency = 1.0f;
+    float Pad0;
+    alignas(16) noise::ErosionParameters erosionParams;
 };
 
 struct Vertex
@@ -69,9 +68,9 @@ GenerateNoise(noise::NoiseFunction noiseFn, const noise::NoiseConfig& noiseCfg,
                 noise::Noise({(x - 1) / 800.0f, y / 800.0f}, noiseCfg, noiseFn);
             glm::vec2 n = normalize(glm::vec2(vd - vu, vl - vr));
 
-            // glm::vec4 h = noise::ErosionFilter(uv, glm::vec3(v, n), 1.0f,
-            //                                    erosionParameters);
-            // v = v + h.x;
+            glm::vec4 h = noise::ErosionFilter(uv, glm::vec3(v, n), 1.0f,
+                                               erosionParameters);
+            v = v + h.x;
 
             uint8_t pixel =
                 static_cast<uint8_t>(glm::clamp(v * 255.0f, 0.0f, 255.0f));
@@ -143,15 +142,16 @@ int main()
         .Descriptors = {vk::DescriptorSetLayoutBinding{
             0, vk::DescriptorType::eStorageBuffer, 1,
             vk::ShaderStageFlagBits::eCompute}},
-        .PushConstants = {{vk::ShaderStageFlagBits::eCompute, 0,
-                           sizeof(NoiseConfig)}},
+        .PushConstants = {vk::PushConstantRange{
+            vk::ShaderStageFlagBits::eCompute, 0, sizeof(ComputeConfig)}},
     };
     gfx::PipelineObj computePip = backend.CreateComputePipeline(computePipInfo);
 
     auto noiseFnStrings = {"Perlin", "Voronoi"};
 
+    NoiseType noiseType = NoiseType::Perlin;
     noise::ErosionParameters erosionParams = {};
-    NoiseConfig noiseCfg = {};
+    noise::NoiseConfig noiseCfg = {};
     // GenerateNoiseResult gnr =
     //     GenerateNoise(noiseFns[currentNoiseFn], noiseCfg, erosionParams);
 
@@ -217,8 +217,9 @@ int main()
 
     uint32_t cfi = backend.FrameBegin();
     backend.BindPipeline(computePip);
+    ComputeConfig compCfg = {noiseType, noiseCfg, 0.0, erosionParams};
     backend.BindPushConstant(computePip, vk::ShaderStageFlagBits::eCompute,
-                             &noiseCfg, sizeof(NoiseConfig));
+                             &compCfg, sizeof(ComputeConfig));
     backend.Dispatch(800.0f / 16.0f, 800.0f / 16.0f, 1.0f);
     backend.FrameEnd(cfi);
 
@@ -237,10 +238,11 @@ int main()
         if (updateNoise)
         {
             backend.FrameBeginCompute(fi);
-            backend.BindPipeline(computePip);
+            ComputeConfig compCfg = {noiseType, noiseCfg, 0.0, erosionParams};
             backend.BindPushConstant(computePip,
                                      vk::ShaderStageFlagBits::eCompute,
-                                     &noiseCfg, sizeof(NoiseConfig));
+                                     &compCfg, sizeof(ComputeConfig));
+            backend.BindPipeline(computePip);
             backend.Dispatch(800.0f / 16.0f, 800.0f / 16.0f, 1.0f);
             backend.FrameEndCompute(fi);
             updateNoise = false;
@@ -250,7 +252,7 @@ int main()
         ImGui::Begin("Noise Parameters");
 
         updateNoise |=
-            ImGui::Combo("Noise Function", (int*)&noiseCfg.Type,
+            ImGui::Combo("Noise Function", (int*)&noiseType,
                          noiseFnStrings.begin(), noiseFnStrings.size());
 
         updateNoise |=
@@ -276,36 +278,45 @@ int main()
         ImGui::End();
 
         ImGui::Begin("Erosion Filter");
-        ImGui::SliderFloat("Strength", &erosionParams.Strength, 0.0f, 1.0f);
-        ImGui::SliderFloat("Gully Weight", &erosionParams.GullyWeight, 0.0f,
-                           1.0f);
-        ImGui::SliderFloat("Detail", &erosionParams.Detail, 0.0f, 4.0f);
+        updateNoise |=
+            ImGui::SliderFloat("Strength", &erosionParams.Strength, 0.0f, 1.0f);
+        updateNoise |= ImGui::SliderFloat(
+            "Gully Weight", &erosionParams.GullyWeight, 0.0f, 1.0f);
+        updateNoise |=
+            ImGui::SliderFloat("Detail", &erosionParams.Detail, 0.0f, 4.0f);
 
         ImGui::Separator();
 
-        ImGui::SliderFloat4("Rounding (RGBA/XYZW)", &erosionParams.Rounding.x,
-                            0.0f, 2.0f);
-        ImGui::SliderFloat4("Onset (RGBA/XYZW)", &erosionParams.Onset.x, 0.0f,
-                            4.0f);
-        ImGui::SliderFloat2("Assumed Slope (XY)", &erosionParams.AssumedSlope.x,
-                            0.0f, 1.0f);
+        updateNoise |= ImGui::SliderFloat4(
+            "Rounding (RGBA/XYZW)", &erosionParams.Rounding.x, 0.0f, 2.0f);
+        updateNoise |= ImGui::SliderFloat4("Onset (RGBA/XYZW)",
+                                           &erosionParams.Onset.x, 0.0f, 4.0f);
+        updateNoise |= ImGui::SliderFloat2(
+            "Assumed Slope (XY)", &erosionParams.AssumedSlope.x, 0.0f, 1.0f);
 
         ImGui::Separator();
 
-        ImGui::SliderFloat("Scale", &erosionParams.Scale, 0.0f, 1.0f);
+        updateNoise |=
+            ImGui::SliderFloat("Scale", &erosionParams.Scale, 0.0f, 1.0f);
 
-        ImGui::SliderInt("Octaves", &erosionParams.Octaves, 1, 8);
+        updateNoise |=
+            ImGui::SliderInt("Octaves", &erosionParams.Octaves, 1, 8);
 
-        ImGui::SliderFloat("Lacunarity", &erosionParams.Lacunarity, 0.0f, 4.0f);
-        ImGui::SliderFloat("Gain", &erosionParams.Gain, 0.0f, 2.0f);
-        ImGui::SliderFloat("Cell Scale", &erosionParams.CellScale, 0.0f, 1.0f);
+        updateNoise |= ImGui::SliderFloat(
+            "Lacunarity", &erosionParams.Lacunarity, 0.0f, 4.0f);
+        updateNoise |=
+            ImGui::SliderFloat("Gain", &erosionParams.Gain, 0.0f, 2.0f);
+        updateNoise |= ImGui::SliderFloat("Cell Scale",
+                                          &erosionParams.CellScale, 0.0f, 1.0f);
 
         ImGui::Separator();
 
-        ImGui::SliderFloat("Normalization", &erosionParams.Normalization, 0.0f,
-                           1.0f);
-        ImGui::SliderFloat("Ridge Map", &erosionParams.RidgeMap, 0.0f, 1.0f);
-        ImGui::SliderFloat("Debug", &erosionParams.Debug, 0.0f, 1.0f);
+        updateNoise |= ImGui::SliderFloat(
+            "Normalization", &erosionParams.Normalization, 0.0f, 1.0f);
+        updateNoise |= ImGui::SliderFloat("Ridge Map", &erosionParams.RidgeMap,
+                                          0.0f, 1.0f);
+        updateNoise |=
+            ImGui::SliderFloat("Debug", &erosionParams.Debug, 0.0f, 1.0f);
         ImGui::End();
 
         ImGui::Begin("Noise");
