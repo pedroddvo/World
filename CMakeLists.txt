@@ -9,6 +9,7 @@ add_executable(world
     src/gfx/vma.cpp
     src/gfx/stb_image.cpp
     src/gfx/noise.cpp
+    src/render.cpp
     src/gfx.cpp
     src/main.cpp)
 

@@ -921,6 +921,9 @@ void Backend::Destroy(Object obj)
     case ObjectKind::Sampler:
         DestroySampler(m_Samplers[obj.Id]);
         break;
+    case ObjectKind::Undefined:
+        Ensure(false && "unreachable");
+        break;
     }
 }
 

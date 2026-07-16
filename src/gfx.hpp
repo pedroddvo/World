@@ -15,6 +15,7 @@ namespace gfx
 
 enum class ObjectKind
 {
+    Undefined = 0,
     Buffer,
     Pipeline,
     Image,
@@ -23,6 +24,8 @@ enum class ObjectKind
 
 struct Object
 {
+  public:
+    Object() : Id(0), Kind(ObjectKind::Undefined) {}
 
   private:
     Object(uint32_t id, ObjectKind kind) : Id(id), Kind(kind) {}
@@ -108,9 +111,8 @@ class Backend
     PipelineObj CreateGraphicsPipeline(const CreateGraphicsPipelineInfo& info);
     void UpdatePipelineImage(PipelineObj pip, uint32_t binding, ImageObj img,
                              SamplerObj samp);
-    void UpdatePipelineBuffer(
-        PipelineObj pip, uint32_t binding, BufferObj buf,
-        vk::DescriptorType descriptorType);
+    void UpdatePipelineBuffer(PipelineObj pip, uint32_t binding, BufferObj buf,
+                              vk::DescriptorType descriptorType);
 
   private:
     void DestroySwapchain();
