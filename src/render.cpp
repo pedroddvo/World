@@ -1,9 +1,11 @@
 #include "render.hpp"
 #include "imgui.h"
+#include "spdlog/spdlog.h"
 #include <arm/_mcontext.h>
 #include <array>
 #include <cstdint>
 #include <glm/glm.hpp>
+#include <vulkan/vulkan_enums.hpp>
 
 static constexpr uint32_t g_IndicesCount = 799 * 799 * 6;
 static constexpr std::array g_NoiseFnStrings = {"Perlin", "Voronoi"};
@@ -51,14 +53,15 @@ Renderer::Renderer(GLFWwindow* window) : m_Window(window), m_Backend(window)
         .FragmentShader = "shader/triangle.frag.spv",
         .DepthTest = true,
 
-        .Bindings = {{0, sizeof(Vertex)}},
+        .Bindings = {{0, sizeof(glm::vec2)}},
         .Attributes = {vk::VertexInputAttributeDescription{
-                           0, 0, vk::Format::eR32G32B32A32Sfloat},
-                       vk::VertexInputAttributeDescription{
-                           1, 0, vk::Format::eR32G32B32A32Sfloat}},
-        // .Descriptors = {vk::DescriptorSetLayoutBinding{
-        //     0, vk::DescriptorType::eUniformBuffer, 1,
-        //     vk::ShaderStageFlagBits::eFragment}},
+            0, 0, vk::Format::eR32G32Sfloat}},
+        .Descriptors = {vk::DescriptorSetLayoutBinding{
+                            0, vk::DescriptorType::eSampledImage, 1,
+                            vk::ShaderStageFlagBits::eVertex},
+                        vk::DescriptorSetLayoutBinding{
+                            1, vk::DescriptorType::eSampler, 1,
+                            vk::ShaderStageFlagBits::eVertex}},
         .PushConstants = {vk::PushConstantRange{
             vk::ShaderStageFlagBits::eVertex, 0, sizeof(glm::mat4)}},
     });
@@ -66,18 +69,24 @@ Renderer::Renderer(GLFWwindow* window) : m_Window(window), m_Backend(window)
     m_ComputePipeline = m_Backend.CreateComputePipeline({
         .ComputeShader = "shader/heightmap.comp.spv",
         .Descriptors = {vk::DescriptorSetLayoutBinding{
-            0, vk::DescriptorType::eStorageBuffer, 1,
+            0, vk::DescriptorType::eStorageImage, 1,
             vk::ShaderStageFlagBits::eCompute}},
         .PushConstants = {vk::PushConstantRange{
             vk::ShaderStageFlagBits::eCompute, 0, sizeof(ComputeConfig)}},
     });
 
-    m_VertexBuffer =
-        m_Backend.CreateBuffer(vk::BufferUsageFlagBits::eVertexBuffer |
-                                   vk::BufferUsageFlagBits::eStorageBuffer,
-                               sizeof(Vertex) * 800 * 800);
-    m_Backend.UpdatePipelineBuffer(m_ComputePipeline, 0, m_VertexBuffer,
-                                   vk::DescriptorType::eStorageBuffer);
+    std::vector<glm::vec2> vertices = {};
+    m_VertexBuffer = m_Backend.CreateBuffer(
+        vk::BufferUsageFlagBits::eVertexBuffer, sizeof(glm::vec2) * 800 * 800);
+    for (int y = 0; y < 800; y++)
+    {
+        for (int x = 0; x < 800; x++)
+        {
+            vertices.push_back({x / 800.0f, y / 800.0f});
+        }
+    }
+    m_Backend.UploadBuffer(m_VertexBuffer, vertices.size() * sizeof(glm::vec2),
+                           vertices.data());
 
     std::vector<uint32_t> indices = {};
     m_IndexBuffer =
@@ -100,6 +109,17 @@ Renderer::Renderer(GLFWwindow* window) : m_Window(window), m_Backend(window)
     }
     m_Backend.UploadBuffer(m_IndexBuffer, sizeof(uint32_t) * indices.size(),
                            indices.data());
+
+    m_HeightMap = m_Backend.CreateImage(vk::Format::eR32G32B32A32Sfloat,
+                                        sizeof(glm::vec3) * 800 * 800, 800, 800,
+                                        vk::ImageUsageFlagBits::eStorage);
+    m_HeightMapSamp = m_Backend.CreateSampler(vk::Filter::eLinear);
+    m_Backend.UpdatePipelineImage(m_ComputePipeline, 0, m_HeightMap,
+                                  vk::DescriptorType::eStorageImage);
+
+    m_Backend.UpdatePipelineImage(m_DrawPipeline, 0, m_HeightMap,
+                                  vk::DescriptorType::eSampledImage);
+    m_Backend.UpdatePipelineSampler(m_DrawPipeline, 1, m_HeightMapSamp);
 
     ComputeNoise();
 }
@@ -174,7 +194,7 @@ void Renderer::Render(float dt)
 
     ImGui::Begin("Noise");
     ImVec2 availSize = ImGui::GetContentRegionAvail();
-    // backend.DrawImageImGui(heightMap, availSize.x, availSize.y);
+    // m_Backend.DrawImageImGui(m_HeightMap);
     // backend.DrawImageImGui(normalMap, availSize.x, availSize.y);
     ImGui::End();
 

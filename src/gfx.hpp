@@ -98,10 +98,12 @@ class Backend
     void Destroy(Object obj);
 
     BufferObj CreateBuffer(vk::BufferUsageFlags usage, size_t size);
-    void UploadBuffer(BufferObj obj, size_t size, void* data);
+    void UploadBuffer(BufferObj obj, size_t sizeBytes, void* data);
 
-    ImageObj CreateImage(vk::Format format, size_t size, uint32_t width,
-                         uint32_t height, uint32_t depth = 1);
+    ImageObj CreateImage(
+        vk::Format format, size_t sizeBytes, uint32_t width, uint32_t height,
+        vk::ImageUsageFlags usage = vk::ImageUsageFlagBits::eTransferDst,
+        uint32_t depth = 1);
     void UploadImage(ImageObj obj, size_t size, void* data);
     void DrawImageImGui(ImageObj obj, uint32_t width = 0, uint32_t height = 0);
 
@@ -110,9 +112,11 @@ class Backend
     PipelineObj CreateComputePipeline(const CreateComputePipelineInfo& info);
     PipelineObj CreateGraphicsPipeline(const CreateGraphicsPipelineInfo& info);
     void UpdatePipelineImage(PipelineObj pip, uint32_t binding, ImageObj img,
-                             SamplerObj samp);
+                             vk::DescriptorType descriptorType);
     void UpdatePipelineBuffer(PipelineObj pip, uint32_t binding, BufferObj buf,
                               vk::DescriptorType descriptorType);
+    void UpdatePipelineSampler(PipelineObj pipObj, uint32_t binding,
+                               SamplerObj sampObj);
 
   private:
     void DestroySwapchain();
@@ -177,6 +181,7 @@ class Backend
         size_t Size = 0;
     };
     std::vector<Image> m_Images = {};
+    std::vector<ImageObj> m_ImagesUsedInCompute = {};
 
     Image CreateDepthImage(uint32_t width, uint32_t height);
     Image m_DepthImage = {};

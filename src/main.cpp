@@ -17,7 +17,7 @@ int main()
     Ensure(glfwInit(), "failed to initialize glfw");
     glfwWindowHint(GLFW_CLIENT_API, GLFW_NO_API);
 
-    GLFWwindow* window = glfwCreateWindow(800, 600, "vox", nullptr, nullptr);
+    GLFWwindow* window = glfwCreateWindow(800, 600, "world", nullptr, nullptr);
     Ensure(window != nullptr, "failed to create window");
     glfwSetKeyCallback(window, KeyCallback);
     glfwSetCursorPosCallback(window, MouseCallback);

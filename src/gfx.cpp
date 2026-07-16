@@ -161,9 +161,11 @@ Backend::Backend(GLFWwindow* window) : m_Window(window)
             .setLevel(vk::CommandBufferLevel::ePrimary))[0];
 
     vk::DescriptorPoolSize poolSizes[] = {
-        {vk::DescriptorType::eCombinedImageSampler, 10},
         {vk::DescriptorType::eUniformBuffer, 10},
         {vk::DescriptorType::eStorageBuffer, 10},
+        {vk::DescriptorType::eStorageImage, 10},
+        {vk::DescriptorType::eSampledImage, 10},
+        {vk::DescriptorType::eSampler, 10},
     };
     m_DescriptorPool = m_Device.createDescriptorPool(
         vk::DescriptorPoolCreateInfo().setMaxSets(10).setPoolSizes(poolSizes));
@@ -374,16 +376,33 @@ void Backend::FrameBeginRender(uint32_t imageIndex)
 void Backend::FrameBeginCompute(uint32_t imageIndex)
 {
     vk::CommandBuffer cmd = m_FrameCommands[m_CurrentFrame];
+
+    std::vector<vk::ImageMemoryBarrier> imgBarriers = {};
+    for (ImageObj img : m_ImagesUsedInCompute)
+    {
+        imgBarriers.push_back(
+            vk::ImageMemoryBarrier()
+                .setImage(m_Images[img.Id].Handle)
+                .setOldLayout(vk::ImageLayout::eUndefined)
+                .setNewLayout(vk::ImageLayout::eGeneral)
+                .setDstAccessMask(vk::AccessFlagBits::eShaderWrite)
+                .setSubresourceRange(
+                    {vk::ImageAspectFlagBits::eColor, 0, 1, 0, 1}));
+    }
+
+    m_FrameCommands[m_CurrentFrame].pipelineBarrier(
+        vk::PipelineStageFlagBits::eTopOfPipe,
+        vk::PipelineStageFlagBits::eComputeShader, {}, {}, {}, imgBarriers);
 }
 
 void Backend::FrameEndCompute(uint32_t imageIndex)
 {
     vk::CommandBuffer cmd = m_FrameCommands[m_CurrentFrame];
 
-    std::vector<vk::BufferMemoryBarrier> barriers = {};
+    std::vector<vk::BufferMemoryBarrier> bufBarriers = {};
     for (BufferObj buf : m_BuffersUsedInCompute)
     {
-        barriers.push_back(
+        bufBarriers.push_back(
             vk::BufferMemoryBarrier()
                 .setBuffer(m_Buffers[buf.Id].Handle)
                 .setSize(vk::WholeSize)
@@ -391,9 +410,25 @@ void Backend::FrameEndCompute(uint32_t imageIndex)
                 .setDstAccessMask(vk::AccessFlagBits::eVertexAttributeRead));
     }
 
+    std::vector<vk::ImageMemoryBarrier> imgBarriers = {};
+    for (ImageObj img : m_ImagesUsedInCompute)
+    {
+        imgBarriers.push_back(
+            vk::ImageMemoryBarrier()
+                .setImage(m_Images[img.Id].Handle)
+                .setOldLayout(vk::ImageLayout::eGeneral)
+                .setNewLayout(vk::ImageLayout::eShaderReadOnlyOptimal)
+                .setSrcAccessMask(vk::AccessFlagBits::eShaderWrite)
+                .setDstAccessMask(vk::AccessFlagBits::eShaderRead)
+                .setSubresourceRange(
+                    {vk::ImageAspectFlagBits::eColor, 0, 1, 0, 1}));
+    }
+
     m_FrameCommands[m_CurrentFrame].pipelineBarrier(
         vk::PipelineStageFlagBits::eComputeShader,
-        vk::PipelineStageFlagBits::eVertexInput, {}, {}, barriers, {});
+        vk::PipelineStageFlagBits::eVertexShader |
+            vk::PipelineStageFlagBits::eFragmentShader,
+        {}, {}, bufBarriers, imgBarriers);
 }
 
 void Backend::FrameEndRender(uint32_t imageIndex)
@@ -446,11 +481,10 @@ void Backend::FrameEnd(uint32_t imageIndex)
     m_CurrentFrame = (m_CurrentFrame + 1) % FramesInFlight;
 }
 
-void Backend::UpdatePipelineImage(PipelineObj pipObj, uint32_t binding,
-                                  ImageObj imgObj, SamplerObj sampObj)
+void Backend::UpdatePipelineSampler(PipelineObj pipObj, uint32_t binding,
+                                    SamplerObj sampObj)
 {
     Ensure(pipObj.Kind == ObjectKind::Pipeline);
-    Ensure(imgObj.Kind == ObjectKind::Image);
     Ensure(sampObj.Kind == ObjectKind::Sampler);
 
     Pipeline& pip = m_Pipelines[pipObj.Id];
@@ -459,18 +493,47 @@ void Backend::UpdatePipelineImage(PipelineObj pipObj, uint32_t binding,
     vk::WriteDescriptorSet write = {};
     write.dstBinding = binding;
     write.dstSet = pip.Descriptor;
-    write.descriptorType = vk::DescriptorType::eCombinedImageSampler;
+    write.descriptorType = vk::DescriptorType::eSampler;
 
-    Image& img = m_Images[imgObj.Id];
     Sampler& samp = m_Samplers[sampObj.Id];
-    Ensure(img.Alive && samp.Alive);
+    Ensure(samp.Alive);
 
     vk::DescriptorImageInfo imageInfo =
-        vk::DescriptorImageInfo()
-            .setImageView(img.View)
-            .setImageLayout(vk::ImageLayout::eShaderReadOnlyOptimal)
-            .setSampler(samp.Handle);
+        vk::DescriptorImageInfo().setSampler(samp.Handle);
     write.setImageInfo({imageInfo});
+
+    m_Device.updateDescriptorSets({write}, {});
+}
+
+void Backend::UpdatePipelineImage(PipelineObj pipObj, uint32_t binding,
+                                  ImageObj imgObj,
+                                  vk::DescriptorType descriptorType)
+{
+    Ensure(pipObj.Kind == ObjectKind::Pipeline);
+    Ensure(imgObj.Kind == ObjectKind::Image);
+
+    Pipeline& pip = m_Pipelines[pipObj.Id];
+    Ensure(pip.Alive);
+
+    vk::WriteDescriptorSet write = {};
+    write.dstBinding = binding;
+    write.dstSet = pip.Descriptor;
+    write.descriptorType = descriptorType;
+
+    Image& img = m_Images[imgObj.Id];
+    Ensure(img.Alive);
+
+    vk::DescriptorImageInfo imageInfo =
+        vk::DescriptorImageInfo().setImageView(img.View).setImageLayout(
+            descriptorType == vk::DescriptorType::eStorageImage
+                ? vk::ImageLayout::eGeneral
+                : vk::ImageLayout::eShaderReadOnlyOptimal);
+    write.setImageInfo({imageInfo});
+
+    if (pip.Kind == PipelineKind::Compute)
+    {
+        m_ImagesUsedInCompute.push_back(imgObj);
+    }
 
     m_Device.updateDescriptorSets({write}, {});
 }
@@ -511,9 +574,9 @@ SamplerObj Backend::CreateSampler(vk::Filter filter)
     vk::SamplerCreateInfo samplerInfo = {};
     samplerInfo.magFilter = filter;
     samplerInfo.minFilter = filter;
-    samplerInfo.addressModeU = vk::SamplerAddressMode::eRepeat;
-    samplerInfo.addressModeV = vk::SamplerAddressMode::eRepeat;
-    samplerInfo.addressModeW = vk::SamplerAddressMode::eRepeat;
+    samplerInfo.addressModeU = vk::SamplerAddressMode::eClampToEdge;
+    samplerInfo.addressModeV = vk::SamplerAddressMode::eClampToEdge;
+    samplerInfo.addressModeW = vk::SamplerAddressMode::eClampToEdge;
 
     Sampler samp = {.Alive = true};
     samp.Handle = m_Device.createSampler(samplerInfo);
@@ -523,7 +586,8 @@ SamplerObj Backend::CreateSampler(vk::Filter filter)
 }
 
 ImageObj Backend::CreateImage(vk::Format format, size_t size, uint32_t width,
-                              uint32_t height, uint32_t depth)
+                              uint32_t height, vk::ImageUsageFlags usage,
+                              uint32_t depth)
 {
     vk::ImageCreateInfo imgInfo = {};
     imgInfo.imageType = vk::ImageType::e2D;
@@ -533,8 +597,7 @@ ImageObj Backend::CreateImage(vk::Format format, size_t size, uint32_t width,
     imgInfo.arrayLayers = 1;
     imgInfo.samples = vk::SampleCountFlagBits::e1;
     imgInfo.tiling = vk::ImageTiling::eOptimal;
-    imgInfo.usage =
-        vk::ImageUsageFlagBits::eSampled | vk::ImageUsageFlagBits::eTransferDst;
+    imgInfo.usage = usage | vk::ImageUsageFlagBits::eSampled;
 
     VmaAllocationCreateInfo allocInfo = {};
     allocInfo.usage = VMA_MEMORY_USAGE_AUTO;

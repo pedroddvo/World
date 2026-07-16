@@ -314,7 +314,8 @@ struct Vertex
 }
 
 [[vk::binding(0, 0)]]
-globallycoherent RWStructuredBuffer<Vertex> Vertices;
+[format("rgba32f")]
+globallycoherent RWTexture2D<float4> HeightMap;
 
 [numthreads(16, 16, 1)]
 [shader("compute")]
@@ -333,8 +334,5 @@ void compute_main(uint3 id : SV_DispatchThreadID, uniform ComputeConfig ComputeC
     float4 h = ErosionFilter(uv, n, 1.0f, ComputeCfg.erosionParams);
     n.x += h.x;
 
-    uint index = globalID.y * 800 + globalID.x;
-    Vertices[index].Position = 
-        float4(uv.x*800.0-400.0, (1.0f - n.x) * 100.0f, uv.y*800.0-400.0, 0.0);
-    Vertices[index].Normal = float4(0.0, 1.0, 0.0, 0.0);
+    HeightMap[globalID.xy] = float4(n, 0.0);
 }

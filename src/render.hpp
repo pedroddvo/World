@@ -32,6 +32,9 @@ class Renderer
     gfx::PipelineObj m_DrawPipeline, m_ComputePipeline;
     gfx::BufferObj m_VertexBuffer, m_IndexBuffer;
 
+    gfx::ImageObj m_HeightMap;
+    gfx::SamplerObj m_HeightMapSamp;
+
     NoiseType m_NoiseType = NoiseType::Perlin;
     noise::ErosionParameters m_ErosionParams = {};
     noise::NoiseConfig m_NoiseCfg = {};
